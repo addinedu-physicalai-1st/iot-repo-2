@@ -1,0 +1,3 @@
+cd /home/tonyno/Projects/1.github/local_project/smart_parking_system
+
+mysql -u root -p smart_parking < db/init_manual.sql
