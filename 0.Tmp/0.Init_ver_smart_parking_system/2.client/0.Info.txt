@@ -1,0 +1,20 @@
+서버 먼저 실행 (이미 하고 있다면 건너뛰기)
+다른 터미널에서:
+
+cd /home/tonyno/Projects/1.github/local_project/smart_parking_system/1.serversource .venv/bin/activate          
+# 서버용 venvuvicorn app.main:app --host 0.0.0.0 --port 8000
+클라이언트 폴더로 이동
+
+cd /home/tonyno/Projects/1.github/local_project/smart_parking_system/2.client
+(최초 1회) 클라이언트용 가상환경 + 패키지 설치
+
+python3 -m venv .venvsource .venv/bin/activatepip install -r requirements.txt
+.env에서 서버 주소 확인/수정
+
+2.client/.env:
+SERVER_BASE_URL=http://127.0.0.1:8000   # 서버가 다른 PC면 IP만 수정
+
+클라이언트 실행
+
+cd /home/tonyno/Projects/1.github/local_project/smart_parking_system/2.clientsource .venv/bin/activatepython main.py
+PyQt 창이 뜨고, 서버와 통신이 되면 대시보드에 주차 요약/장비 목록 등이 표시됩니다.

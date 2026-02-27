@@ -31,7 +31,6 @@ def occupy_slot(slot_id: int, plate: str | None = None, db: Session = Depends(ge
     if not slot:
         raise HTTPException(status_code=404, detail="Slot not found")
     slot.is_occupied = True
-    slot.sensor_connected = True
     slot.last_vehicle_plate = plate
     db.add(slot)
     db.commit()
@@ -44,7 +43,6 @@ def release_slot(slot_id: int, db: Session = Depends(get_db)):
     if not slot:
         raise HTTPException(status_code=404, detail="Slot not found")
     slot.is_occupied = False
-    slot.sensor_connected = True
     db.add(slot)
     db.commit()
     return {"ok": True}
@@ -71,7 +69,6 @@ def dashboard_summary(db: Session = Depends(get_db)):
         .limit(20)
         .all()
     )
-    slots = db.query(models.ParkingSlot).all()
 
     return schemas.DashboardSummary(
         total_slots=total_slots,
@@ -79,6 +76,5 @@ def dashboard_summary(db: Session = Depends(get_db)):
         free_slots=total_slots - occupied_slots,
         active_devices=active_devices,
         recent_events=recent_events,
-        slots=slots,
     )
 

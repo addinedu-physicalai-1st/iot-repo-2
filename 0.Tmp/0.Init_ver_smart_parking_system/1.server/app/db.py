@@ -1,4 +1,4 @@
-from typing import Generator
+from contextlib import contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
@@ -12,13 +12,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, futu
 Base = declarative_base()
 
 
-def get_db() -> Generator[Session, None, None]:
-    """
-    FastAPI 의 의존성으로 사용하는 DB 세션.
-
-    - 요청 처리 중 예외가 없으면 commit
-    - 예외 발생 시 rollback 후 재전파
-    """
+@contextmanager
+def get_db() -> Session:
     db = SessionLocal()
     try:
         yield db
