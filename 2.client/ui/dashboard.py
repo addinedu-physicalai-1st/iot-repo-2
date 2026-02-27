@@ -12,6 +12,10 @@ from PyQt6.QtWidgets import (
     QWidget,
     QHBoxLayout,
     QGroupBox,
+    QFrame,
+    QGridLayout,
+    QSplitter,
+    QComboBox,
 )
 
 from api_client import ApiClient
@@ -23,7 +27,49 @@ class DashboardWindow(QMainWindow):
         self.api = ApiClient()
 
         self.setWindowTitle("스마트 주차장 관리 시스템 - 대시보드")
-        self.resize(900, 600)
+        self.resize(1200, 700)
+
+        # 전체 스타일
+        self.setStyleSheet(
+            """
+            QMainWindow {
+                background-color: #1e1f26;
+            }
+            QGroupBox {
+                color: #ffffff;
+                border: 1px solid #3a3b45;
+                border-radius: 6px;
+                margin-top: 18px;
+                font-weight: bold;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 8px;
+            }
+            QLabel {
+                color: #e0e0e0;
+            }
+            QTableWidget {
+                background-color: #252733;
+                color: #f5f5f5;
+                gridline-color: #3a3b45;
+                selection-background-color: #3a86ff;
+            }
+            QPushButton {
+                background-color: #3a86ff;
+                color: #ffffff;
+                border-radius: 4px;
+                padding: 6px 12px;
+            }
+            QPushButton:hover {
+                background-color: #4f9dff;
+            }
+            QPushButton:pressed {
+                background-color: #2f6fd1;
+            }
+            """
+        )
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -48,12 +94,69 @@ class DashboardWindow(QMainWindow):
             self.label_devices,
         ):
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet("font-size: 16px;")
+            lbl.setStyleSheet("font-size: 18px; font-weight: bold;")
             summary_layout.addWidget(lbl)
 
         main_layout.addWidget(summary_box)
 
-        # 중간 영역: 장비 목록
+        # 중앙 영역: 좌측 주차면 맵, 우측 장비/이벤트
+        splitter = QSplitter()
+        splitter.setOrientation(Qt.Orientation.Horizontal)
+        main_layout.addWidget(splitter, 1)
+
+        # ── 좌측: 주차 레이아웃 맵 ─────────────────────────────
+        left_frame = QFrame()
+        left_layout = QVBoxLayout()
+        left_frame.setLayout(left_layout)
+
+        parking_box = QGroupBox("주차 레이아웃")
+        parking_layout = QGridLayout()
+        parking_box.setLayout(parking_layout)
+
+        self.slot_widgets: dict[str, QLabel] = {}
+
+        def create_slot_label(name: str, title: str) -> QLabel:
+            lbl = QLabel(title)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setFixedSize(90, 60)
+            lbl.setStyleSheet(
+                """
+                background-color: #2e7d32;  /* 기본: 빈자리(초록) */
+                border-radius: 6px;
+                border: 2px solid #1b5e20;
+                font-weight: bold;
+            """
+            )
+            self.slot_widgets[name] = lbl
+            return lbl
+
+        # 노상 4면 (S1~S4)
+        parking_layout.addWidget(QLabel("노상 주차면"), 0, 0, 1, 4)
+        parking_layout.addWidget(create_slot_label("S1", "S1"), 1, 0)
+        parking_layout.addWidget(create_slot_label("S2", "S2"), 1, 1)
+        parking_layout.addWidget(create_slot_label("S3", "S3"), 1, 2)
+        parking_layout.addWidget(create_slot_label("S4", "S4"), 1, 3)
+
+        # 주차타워 6면 (T1~T6)
+        parking_layout.addWidget(QLabel("주차타워"), 2, 0, 1, 3)
+        parking_layout.addWidget(create_slot_label("T1", "T1"), 3, 0)
+        parking_layout.addWidget(create_slot_label("T2", "T2"), 3, 1)
+        parking_layout.addWidget(create_slot_label("T3", "T3"), 3, 2)
+        parking_layout.addWidget(create_slot_label("T4", "T4"), 4, 0)
+        parking_layout.addWidget(create_slot_label("T5", "T5"), 4, 1)
+        parking_layout.addWidget(create_slot_label("T6", "T6"), 4, 2)
+
+        left_layout.addWidget(parking_box)
+        left_layout.addStretch()
+
+        splitter.addWidget(left_frame)
+
+        # ── 우측: 장비 목록 + 디바이스 상태 + 이벤트 ───────────
+        right_frame = QFrame()
+        right_vlayout = QVBoxLayout()
+        right_frame.setLayout(right_vlayout)
+
+        # 장비 목록
         devices_box = QGroupBox("장비 목록")
         devices_layout = QVBoxLayout()
         devices_box.setLayout(devices_layout)
@@ -63,10 +166,67 @@ class DashboardWindow(QMainWindow):
         self.table_devices.horizontalHeader().setStretchLastSection(True)
 
         devices_layout.addWidget(self.table_devices)
-        main_layout.addWidget(devices_box)
+        right_vlayout.addWidget(devices_box, 2)
 
-        # 하단: 최근 이벤트(서버 API 구조만 잡혀 있으므로 간단히 텍스트로 표현)
-        events_box = QGroupBox("최근 이벤트 (서버에서 요약)")
+        # 디바이스 상태 요약 (차단바/LCD/입·출차 감지 센서)
+        device_status_box = QGroupBox("디바이스 상태 요약")
+        device_status_layout = QVBoxLayout()
+        device_status_box.setLayout(device_status_layout)
+
+        # 차단기 상태 콤보박스
+        gate_row = QHBoxLayout()
+        label_gate = QLabel("차단기 상태:")
+        self.combo_gate_status = QComboBox()
+        self.combo_gate_status.addItems(["연결 안됨", "닫힘", "열림", "자동"])
+        self.combo_gate_status.setCurrentIndex(0)
+        # 초기에는 '연결 안됨' 상태이므로 나머지 항목 비활성화
+        self.combo_gate_status.currentIndexChanged.connect(
+            self._update_gate_combo_enabled
+        )
+        self._update_gate_combo_enabled()
+        gate_row.addWidget(label_gate)
+        gate_row.addWidget(self.combo_gate_status)
+        gate_row.addStretch()
+        device_status_layout.addLayout(gate_row)
+
+        # 센서 상태 버튼 (좌: 입차 감지, 우: 출차 감지)
+        sensor_row = QHBoxLayout()
+        label_sensor = QLabel("입·출차 감지 센서:")
+        sensor_row.addWidget(label_sensor)
+
+        self.btn_sensor_left = QPushButton("Left (입차)")
+        self.btn_sensor_right = QPushButton("Right (출차)")
+
+        # 기본 스타일: 연결 안됨(회색)
+        self._set_sensor_button_state(self.btn_sensor_left, "연결 안됨")
+        self._set_sensor_button_state(self.btn_sensor_right, "연결 안됨")
+
+        # Tooltip 설명 추가
+        tooltip_text = (
+            "센서 상태 의미:\n"
+            "- 회색: 연결 안됨 (센서 미연결 / 데이터 없음)\n"
+            "- 초록: 감지 없음 (센서 정상, 차량 없음)\n"
+            "- 빨강: 차량 감지 (입차/출차 감지됨)"
+        )
+        self.btn_sensor_left.setToolTip(tooltip_text)
+        self.btn_sensor_right.setToolTip(tooltip_text)
+
+        sensor_row.addWidget(self.btn_sensor_left)
+        sensor_row.addWidget(self.btn_sensor_right)
+        sensor_row.addStretch()
+        device_status_layout.addLayout(sensor_row)
+
+        # LCD / 센서 요약 텍스트
+        self.label_lcd_info = QLabel("LCD: -")
+        self.label_sensor_info = QLabel("센서 요약: -")
+        for lbl in (self.label_lcd_info, self.label_sensor_info):
+            lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            device_status_layout.addWidget(lbl)
+
+        right_vlayout.addWidget(device_status_box, 1)
+
+        # 최근 이벤트
+        events_box = QGroupBox("최근 이벤트")
         events_layout = QVBoxLayout()
         events_box.setLayout(events_layout)
 
@@ -75,7 +235,10 @@ class DashboardWindow(QMainWindow):
         self.label_events.setWordWrap(True)
         events_layout.addWidget(self.label_events)
 
-        main_layout.addWidget(events_box)
+        right_vlayout.addWidget(events_box, 1)
+
+        splitter.addWidget(right_frame)
+        splitter.setSizes([500, 700])
 
         # 리프레시 버튼 및 자동 리프레시 타이머
         btn_layout = QHBoxLayout()
@@ -115,6 +278,83 @@ class DashboardWindow(QMainWindow):
         self.label_free.setText(f"빈 공간: {data.get('free_slots', '-')}")
         self.label_devices.setText(f"활성 장비: {data.get('active_devices', '-')}")
 
+        # 슬롯 상태가 포함되어 있다면 맵에도 반영
+        slots: List[Dict[str, Any]] | None = data.get("slots")
+        if slots:
+            self.update_slot_map(slots)
+
+            # 디바이스 센서 요약도 업데이트 (현재는 슬롯 점유 기반으로 요약)
+            occupied = [s for s in slots if s.get("is_occupied")]
+            total = len(slots)
+            self.label_sensor_info.setText(
+                f"센서 기반 주차 상태: {len(occupied)}/{total}면 사용 중"
+            )
+
+            # 간단히 LCD 정보도 여기서 표현 (esp32_board2의 '현재 X대 주차중'과 동일 의미)
+            self.label_lcd_info.setText(
+                f"LCD 표시 예: 현재 {len(occupied)}대 주차중"
+            )
+
+        # 차단기 상태 콤보박스는 현재 UI 테스트용 (향후 서버/디바이스와 연동 예정)
+        # 서버 정보에 따라 기본값을 바꾸고 싶다면 여기에서 setCurrentIndex 를 조정하면 됨.
+
+    def _set_sensor_button_state(self, button: QPushButton, state: str) -> None:
+        """센서 버튼 색상/텍스트를 상태에 따라 변경."""
+        if state == "연결 안됨":
+            button.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #616161;
+                    color: #ffffff;
+                    border-radius: 4px;
+                    padding: 4px 8px;
+                }
+                """
+            )
+        elif state == "차량 감지":
+            button.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #c62828;
+                    color: #ffffff;
+                    border-radius: 4px;
+                    padding: 4px 8px;
+                }
+                """
+            )
+        elif state == "감지 없음":
+            button.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #2e7d32;
+                    color: #ffffff;
+                    border-radius: 4px;
+                    padding: 4px 8px;
+                }
+                """
+            )
+        button.setProperty("sensor_state", state)
+
+    def _update_gate_combo_enabled(self) -> None:
+        """
+        차단기 상태 콤보박스의 항목 활성화/비활성 제어.
+
+        - 인덱스 0 ('연결 안됨'): 0번만 선택 가능, 나머지 항목 비활성화
+        - 인덱스 1~3 ('닫힘', '열림', '자동'): 모든 항목 선택 가능
+        """
+        model = self.combo_gate_status.model()
+        current = self.combo_gate_status.currentIndex()
+        for i in range(model.rowCount()):
+            item = model.item(i)
+            if item is None:
+                continue
+            if current == 0:
+                # 연결 안됨일 때는 0번만 선택 가능
+                item.setEnabled(i == 0)
+            else:
+                # 연결된 상태에서는 모든 항목 선택 가능
+                item.setEnabled(True)
+
     def update_devices_table(self, devices: List[Dict[str, Any]]) -> None:
         self.table_devices.setRowCount(len(devices))
         for row, dev in enumerate(devices):
@@ -139,6 +379,49 @@ class DashboardWindow(QMainWindow):
             lines.append(f"[{created}] device={device_id} type={etype} msg={msg}")
 
         self.label_events.setText("\n".join(lines))
+
+    def update_slot_map(self, slots: List[Dict[str, Any]]) -> None:
+        """S1~S4, T1~T6 슬롯 상태를 색상으로 표시.
+
+        - sensor_connected == False : 회색 (센서 미연결 / 상태 미수신)
+        - sensor_connected == True  & is_occupied == True  : 빨강 (차량 있음)
+        - sensor_connected == True  & is_occupied == False : 초록 (빈자리)
+        """
+        for s in slots:
+            name = s.get("name")
+            widget = self.slot_widgets.get(name)
+            if not widget:
+                continue
+            occupied = s.get("is_occupied", False)
+            sensor_connected = s.get("sensor_connected", False)
+
+            if not sensor_connected:
+                widget.setStyleSheet(
+                    """
+                    background-color: #616161;  /* 센서 연결 안됨: 회색 */
+                    border-radius: 6px;
+                    border: 2px solid #424242;
+                    font-weight: bold;
+                """
+                )
+            elif occupied:
+                widget.setStyleSheet(
+                    """
+                    background-color: #c62828;  /* 점유: 빨강 */
+                    border-radius: 6px;
+                    border: 2px solid #8e0000;
+                    font-weight: bold;
+                """
+                )
+            else:
+                widget.setStyleSheet(
+                    """
+                    background-color: #2e7d32;  /* 빈자리: 초록 */
+                    border-radius: 6px;
+                    border: 2px solid #1b5e20;
+                    font-weight: bold;
+                """
+                )
 
 
 def run_dashboard() -> None:

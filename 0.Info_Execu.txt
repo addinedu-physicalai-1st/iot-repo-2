@@ -1,0 +1,12 @@
+서버(1.server): 한 번만 띄워 두면 됩니다.
+터미널 A:
+    cd 1.server    source .venv/bin/activate    uvicorn app.main:app --host 0.0.0.0 --port 8000
+2.client (관리/운영 대시보드)
+터미널 B:
+    cd 2.client    source .venv/bin/activate    python main.py
+3.device_client (장비 디바이스 클라이언트)
+터미널 C:
+    cd 3.device_client    source .venv/bin/activate    python main.py
+
+포트 충돌도 없고, 두 PyQt 프로그램이 각각 독립된 프로세스로 떠서
+하나는 “전체 주차 관제 대시보드”, 다른 하나는 “장비 상태/카메라/슬롯 보고용 대시보드”로 동시에 테스트 가능합니다.

@@ -28,7 +28,6 @@ class DeviceRead(DeviceBase):
 class ParkingSlotBase(BaseModel):
     name: str
     level: Optional[str] = None
-    sensor_connected: bool = False
 
 
 class ParkingSlotCreate(ParkingSlotBase):
@@ -63,6 +62,4 @@ class DashboardSummary(BaseModel):
     free_slots: int
     active_devices: int
     recent_events: List[EventLogRead]
-    # 관리 클라이언트에서 슬롯별 센서 상태(디바이스 클라에서 올린 것)를
-    # 한 번에 볼 수 있도록 상세 슬롯 목록도 포함
-    slots: List[ParkingSlotRead] = []
+

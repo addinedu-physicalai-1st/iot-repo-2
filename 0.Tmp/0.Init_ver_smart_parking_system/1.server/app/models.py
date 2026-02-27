@@ -31,8 +31,6 @@ class ParkingSlot(Base):
     name = Column(String(50), nullable=False)  # 예: A-01
     level = Column(String(20), nullable=True)
     is_occupied = Column(Boolean, default=False)
-    # 센서(ESP32/Arduino) 연결 여부. 연결되지 않았으면 대시보드에서 회색으로 표시.
-    sensor_connected = Column(Boolean, default=False)
     last_vehicle_plate = Column(String(20), nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
