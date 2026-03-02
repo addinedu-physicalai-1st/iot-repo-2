@@ -19,12 +19,14 @@ from PyQt6.QtWidgets import (
 )
 
 from api_client import ApiClient
+from ui.resident_manager import ResidentManagerWindow
 
 
 class DashboardWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.api = ApiClient()
+        self._resident_window: ResidentManagerWindow | None = None
 
         self.setWindowTitle("스마트 주차장 관리 시스템 - 대시보드")
         self.resize(1200, 700)
@@ -245,6 +247,13 @@ class DashboardWindow(QMainWindow):
         self.button_refresh = QPushButton("지금 새로고침")
         self.button_refresh.clicked.connect(self.refresh_all)
         btn_layout.addWidget(self.button_refresh)
+
+        self.button_manage_residents = QPushButton("입주민 / 차량 / RFID 관리")
+        self.button_manage_residents.clicked.connect(
+            self.open_resident_manager,
+        )
+        btn_layout.addWidget(self.button_manage_residents)
+
         btn_layout.addStretch()
         main_layout.addLayout(btn_layout)
 
@@ -258,6 +267,13 @@ class DashboardWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self.api.close()
         super().closeEvent(event)
+
+    def open_resident_manager(self) -> None:
+        if self._resident_window is None:
+            self._resident_window = ResidentManagerWindow()
+        self._resident_window.show()
+        self._resident_window.raise_()
+        self._resident_window.activateWindow()
 
     def refresh_all(self) -> None:
         try:

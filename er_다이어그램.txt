@@ -1,0 +1,152 @@
+erDiagram
+
+    USER {
+        int user_id PK
+        string name
+        string phone
+        string email
+        string role  "ADMIN | RESIDENT | VISITOR"
+        datetime created_at
+        datetime updated_at
+    }
+
+    VEHICLE {
+        int vehicle_id PK
+        int user_id FK
+        string plate_number
+        string vehicle_type
+        boolean is_active
+        datetime registered_at
+    }
+
+    PARKING_ZONE {
+        int zone_id PK
+        string zone_name
+        string zone_type  "GROUND | TOWER"
+        int total_slots
+        datetime created_at
+    }
+
+    PARKING_SLOT {
+        int slot_id PK
+        int zone_id FK
+        string slot_code
+        int floor_number
+        string slot_status  "EMPTY | OCCUPIED | RESERVED | ERROR"
+        datetime updated_at
+    }
+
+    SENSOR {
+        int sensor_id PK
+        int slot_id FK
+        string sensor_type "ULTRASONIC | IR | LOOP"
+        string sensor_status
+        datetime last_signal_at
+    }
+
+    ENTRY_GATE {
+        int gate_id PK
+        string gate_type "ENTRY | EXIT"
+        string location
+        string gate_status
+        datetime updated_at
+    }
+
+    LIFT {
+        int lift_id PK
+        string lift_code
+        int current_floor
+        string lift_status  "IDLE | MOVING | ERROR"
+        datetime updated_at
+    }
+
+    LIFT_OPERATION {
+        int operation_id PK
+        int lift_id FK
+        int vehicle_id FK
+        int from_floor
+        int to_floor
+        string operation_status
+        datetime started_at
+        datetime ended_at
+    }
+
+    PARKING_SESSION {
+        int session_id PK
+        int vehicle_id FK
+        int slot_id FK
+        int entry_gate_id FK
+        int exit_gate_id FK
+        datetime entry_time
+        datetime exit_time
+        string session_status  "ACTIVE | COMPLETED | CANCELLED"
+    }
+
+    PAYMENT {
+        int payment_id PK
+        int session_id FK
+        int user_id FK
+        int amount
+        string payment_method "POINT | CARD | TAG"
+        string payment_status "PENDING | PAID | FAILED"
+        datetime paid_at
+    }
+
+    POINT_ACCOUNT {
+        int account_id PK
+        int user_id FK
+        int balance
+        datetime updated_at
+    }
+
+    POINT_HISTORY {
+        int history_id PK
+        int account_id FK
+        int payment_id FK
+        int change_amount
+        string change_type "CHARGE | USE"
+        datetime created_at
+    }
+
+    ACCESS_LOG {
+        int log_id PK
+        int vehicle_id FK
+        int gate_id FK
+        string direction "ENTRY | EXIT"
+        boolean access_result
+        datetime access_time
+    }
+
+    ADMIN_ACTION_LOG {
+        int action_id PK
+        int admin_user_id FK
+        string action_type
+        string target_type
+        int target_id
+        datetime action_time
+    }
+
+    %% 관계 정의
+
+    USER ||--o{ VEHICLE : owns
+    USER ||--|| POINT_ACCOUNT : has
+    USER ||--o{ PAYMENT : makes
+    USER ||--o{ ADMIN_ACTION_LOG : performs
+
+    VEHICLE ||--o{ PARKING_SESSION : creates
+    VEHICLE ||--o{ LIFT_OPERATION : uses
+    VEHICLE ||--o{ ACCESS_LOG : logs
+
+    PARKING_ZONE ||--o{ PARKING_SLOT : contains
+    PARKING_SLOT ||--o{ SENSOR : has
+    PARKING_SLOT ||--o{ PARKING_SESSION : assigned
+
+    ENTRY_GATE ||--o{ PARKING_SESSION : entry_exit
+    ENTRY_GATE ||--o{ ACCESS_LOG : records
+
+    LIFT ||--o{ LIFT_OPERATION : operates
+
+    PARKING_SESSION ||--|| PAYMENT : generates
+
+    POINT_ACCOUNT ||--o{ POINT_HISTORY : tracks
+    PAYMENT ||--o{ POINT_HISTORY : related
