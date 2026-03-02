@@ -106,6 +106,11 @@ class DeviceDashboardWindow(QMainWindow):
             lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             status_layout.addWidget(lbl)
 
+        # 장비 개별 테스트 탭 윈도우 열기 버튼
+        self.btn_open_test_tabs = QPushButton("장비 테스트 탭 열기")
+        self.btn_open_test_tabs.clicked.connect(self.open_test_tabs_window)
+        status_layout.addWidget(self.btn_open_test_tabs)
+
         main_layout.addWidget(status_box)
 
         # 중앙: 좌측 슬롯 상태, 우측 카메라 / 장비
@@ -151,6 +156,9 @@ class DeviceDashboardWindow(QMainWindow):
 
         center_layout.addWidget(right_box, 1)
 
+        # 테스트 탭 윈도우 핸들
+        self._test_tabs_window = None
+
         # 시그널 연결
         self.slotUpdated.connect(self.handle_slot_updated_ui)
         self.cameraFrame.connect(self.handle_camera_frame_ui)
@@ -165,6 +173,20 @@ class DeviceDashboardWindow(QMainWindow):
         self.timer.timeout.connect(self.update_server_status)
         self.timer.start()
         self.update_server_status()
+
+    def open_test_tabs_window(self) -> None:
+        """ESP32 카메라 / IR·RFID·모터 테스트용 탭 윈도우를 연다."""
+        try:
+            from device_test_tabs import DeviceTestTabsWindow
+        except Exception as e:  # noqa: BLE001
+            self.statusBar().showMessage(f"테스트 탭 로드 실패: {e}", 3000)
+            return
+
+        if self._test_tabs_window is None:
+            self._test_tabs_window = DeviceTestTabsWindow()
+        self._test_tabs_window.show()
+        self._test_tabs_window.raise_()
+        self._test_tabs_window.activateWindow()
 
     # ───────── 통신/백엔드 초기화 ─────────
     def start_comm(self) -> None:
