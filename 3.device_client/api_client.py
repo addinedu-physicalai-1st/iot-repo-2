@@ -43,6 +43,47 @@ class DeviceApiClient:
         # TODO: 필요 시 /events API 추가
         print(f"[EVENT] {event_type}: {message}")
 
+    # ─── devices / device_clients 연동 ─────────────────────────
+    def list_device_clients(self) -> list[dict[str, Any]]:
+        resp = self._client.get("/device-clients/")
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_devices(self) -> list[dict[str, Any]]:
+        resp = self._client.get("/devices/")
+        resp.raise_for_status()
+        return resp.json()
+
+    def update_device_is_connected(
+        self,
+        device: dict[str, Any],
+        is_connected: bool,
+    ) -> None:
+        """
+        devices 테이블의 is_connected 값을 갱신.
+
+        서버 쪽 DeviceCreate 스키마에 맞춰 전체 payload를 전송한다.
+        """
+        payload: dict[str, Any] = {
+            "name": device.get("name"),
+            "type": device.get("type"),
+            "device_type": device.get("device_type"),
+            "connection_type": device.get("connection_type") or "ethernet",
+            "connection_detail": device.get("connection_detail"),
+            "control_method": device.get("control_method"),
+            "ip_address": device.get("ip_address"),
+            "port_info": device.get("port_info"),
+            "is_connected": is_connected,
+            "sensor_guids": device.get("sensor_guids"),
+            "config": device.get("config"),
+            "is_active": device.get("is_active", True),
+        }
+        device_id = device.get("id")
+        if device_id is None:
+            return
+        resp = self._client.put(f"/devices/{device_id}", json=payload)
+        resp.raise_for_status()
+
     def close(self) -> None:
         self._client.close()
 

@@ -11,8 +11,15 @@ class Device(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
-    type = Column(String(50), nullable=False)  # esp32, gate_controller, tower, guide_panel 등
+    type = Column(String(50), nullable=False)  # esp32, esp32-cam, arduino 등
+    device_type = Column(String(10), nullable=False)  # 'CLIENT' or 'SERVER'
+    connection_type = Column(String(20), nullable=False, default="ethernet")
+    connection_detail = Column(String(100), nullable=True)
+    control_method = Column(String(50), nullable=True)
     ip_address = Column(String(45), nullable=True)
+    port_info = Column(String(50), nullable=True)  # ethernet: port, serial: port name
+    is_connected = Column(Boolean, default=False)
+    sensor_guids = Column(String(255), nullable=True)
     config = Column(String(255), nullable=True)  # JSON 문자열로 간단 설정 저장
     is_active = Column(Boolean, default=True)
 
@@ -98,4 +105,33 @@ class RfidCard(Base):
     )
 
     resident = relationship("Resident", back_populates="rfid_cards")
+
+
+class Sensor(Base):
+    __tablename__ = "sensors"
+
+    id = Column(Integer, primary_key=True, index=True)
+    guid = Column(String(32), nullable=False, unique=True)
+    name = Column(String(50), nullable=False)
+    sensor_type = Column(String(30), nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by = Column(String(50), nullable=False)
+
+
+class DeviceClient(Base):
+    __tablename__ = "device_clients"
+
+    id = Column(Integer, primary_key=True, index=True)
+    device_no = Column(String(50), nullable=False, unique=True)
+    name = Column(String(100), nullable=False)
+    devices_ids = Column(String(255), nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
 

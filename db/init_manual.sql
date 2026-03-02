@@ -7,6 +7,7 @@ USE smart_parking;
 
 -- 2. 기존 테이블 삭제 (FK 순서 고려: 자식 → 부모)
 DROP TABLE IF EXISTS event_logs;
+DROP TABLE IF EXISTS sensors;
 DROP TABLE IF EXISTS rfid_cards;
 DROP TABLE IF EXISTS residents;
 DROP TABLE IF EXISTS parking_slots;
@@ -14,17 +15,35 @@ DROP TABLE IF EXISTS devices;
 
 -- 3. 새 테이블 생성
 
--- 장비 테이블
 CREATE TABLE devices (
   id              INT AUTO_INCREMENT PRIMARY KEY,
   name            VARCHAR(100) NOT NULL,
-  type            VARCHAR(50)  NOT NULL,         -- esp32, gate_controller, tower 등
+  type            VARCHAR(50)  NOT NULL,         -- esp32, esp32-cam, arduino 등
+  device_type     ENUM('CLIENT','SERVER') NOT NULL, -- 'CLIENT' 또는 'SERVER'
+  connection_type VARCHAR(20)  NOT NULL DEFAULT 'ethernet', -- ethernet, serial 등
+  connection_detail VARCHAR(100) NULL,           -- 예: 'tcp', 'udp,tcp'
+  control_method  VARCHAR(50)  NULL,             -- 예: 'socket', 'restapi'
   ip_address      VARCHAR(45)  NULL,
-  config          VARCHAR(255) NULL,             -- JSON 문자열 등
+  port_info       VARCHAR(50)  NULL,             -- 이더넷: 포트번호, serial: 포트명
   is_active       TINYINT(1)   NOT NULL DEFAULT 1,
+  is_connected    TINYINT(1)   NOT NULL DEFAULT 0,
+  sensor_guids    VARCHAR(255) NULL,             -- 이 장비에 연결된 센서 GUID 리스트(쉼표 구분)
+  config          VARCHAR(255) NULL,             -- JSON 문자열 등
   created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_devices_id (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 디바이스 클라이언트 테이블 (3.device_client PC와 연동되는 장비 묶음)
+CREATE TABLE device_clients (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  device_no       VARCHAR(50)  NOT NULL,          -- 3.device_client .env 의 device_no 와 매칭
+  name            VARCHAR(100) NOT NULL,          -- 예: "기본 device_client PC"
+  devices_ids     VARCHAR(255) NULL,              -- 이 클라이언트가 관리하는 devices.id 리스트(쉼표 구분)
+  is_active       TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY idx_device_clients_no (device_no)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 입주민 테이블
@@ -55,6 +74,18 @@ CREATE TABLE rfid_cards (
     FOREIGN KEY (resident_id) REFERENCES residents(id)
     ON DELETE SET NULL
     ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 센서 테이블 (카메라, IR, RFID, 게이트 서보 등)
+CREATE TABLE sensors (
+  id           INT AUTO_INCREMENT PRIMARY KEY,
+  guid         VARCHAR(32)  NOT NULL,
+  name         VARCHAR(50)  NOT NULL,
+  sensor_type  VARCHAR(30)  NOT NULL,            -- CAMERA, ENTRY_IR, EXIT_IR, RFID, GATE_SERVO 등
+  is_active    TINYINT(1)   NOT NULL DEFAULT 1,  -- 사용 유무
+  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_by   VARCHAR(50)  NOT NULL,            -- 등록한 사람
+  UNIQUE KEY idx_sensors_guid (guid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 주차면 테이블 (sensor_connected 포함)
@@ -88,11 +119,97 @@ CREATE TABLE event_logs (
 
 -- 4. 초기 데이터(장비 + 슬롯) 삽입
 
-INSERT INTO devices (name, type, ip_address, config, is_active, created_at, updated_at)
+INSERT INTO devices (
+  name,
+  type,
+  device_type,
+  connection_type,
+  connection_detail,
+  control_method,
+  ip_address,
+  port_info,
+  is_active,
+  is_connected,
+  sensor_guids,
+  config,
+  created_at,
+  updated_at
+)
 VALUES
-  ('입차 차단기 컨트롤러', 'gate_controller', '192.168.0.101', '{"relay_channel":1}', 1, NOW(), NOW()),
-  ('주차타워 컨트롤러',   'tower_controller', '192.168.0.102', '{"slots":8}',       1, NOW(), NOW())
-ON DUPLICATE KEY UPDATE updated_at = NOW();
+  -- 입구 차단기 컨트롤러: IR(입구/출구) + RFID + 게이트 서보 센서 포함
+  (
+    '입차 차단기 컨트롤러',
+    'gate_controller',
+    'CLIENT',
+    'ethernet',
+    'tcp',
+    'socket',
+    '192.168.25.54',
+    '8080',
+    1,
+    0,
+    'ESP32-S1-ENTRY01,ESP32-S2-EXIT01,ESP32-RFID-01,ESP32-GATE-01',
+    '{"socket_port":8080}',
+    NOW(),
+    NOW()
+  ),
+    -- LPR 카메라 서버 (ESP32-CAM + PC 서버 연동)
+  (
+    'LPR 카메라 서버',
+    'lpr_camera_server',
+    'SERVER',
+    'ethernet',
+    'udp,tcp',
+    'restapi',
+    '192.168.25.55',
+    '5555', -- 주 통신 포트 (REST)
+    1,
+    0,
+    'ESP32-CAM-01',
+    '{"rest_port":5555,"udp_port":7072}',
+    NOW(),
+    NOW()
+  ),
+  -- 주차타워 컨트롤러: 주차타워 Board No.3 등과 연동 예정
+  (
+    '주차타워 컨트롤러',
+    'tower_controller',
+    'CLIENT',
+    'serial',
+    'serial',
+    NULL,
+    '',
+    'ttyUSB0', -- 예시: USB 직렬 포트명
+    1,
+    0,
+    NULL,
+    '{"serial_port":"ttyUSB0"}',
+    NOW(),
+    NOW()
+  )
+ON DUPLICATE KEY UPDATE
+  type = VALUES(type),
+  device_type = VALUES(device_type),
+  ip_address = VALUES(ip_address),
+  connection_type = VALUES(connection_type),
+  connection_detail = VALUES(connection_detail),
+  control_method = VALUES(control_method),
+  port_info = VALUES(port_info),
+  sensor_guids = VALUES(sensor_guids),
+  config = VALUES(config),
+  is_connected = VALUES(is_connected),
+  is_active = VALUES(is_active),
+  updated_at = NOW();
+
+-- 디바이스 클라이언트 샘플 데이터 (현재는 3.device_client 한 대가 전체 장비를 관리)
+INSERT INTO device_clients (device_no, name, devices_ids, is_active, created_at, updated_at)
+VALUES
+  ('DC-001', '기본 device_client PC', '1,2,3', 1, NOW(), NOW())
+ON DUPLICATE KEY UPDATE
+  name = VALUES(name),
+  devices_ids = VALUES(devices_ids),
+  is_active = VALUES(is_active),
+  updated_at = NOW();
 
 INSERT INTO parking_slots (name, level, is_occupied, sensor_connected, last_vehicle_plate, created_at, updated_at)
 VALUES
@@ -137,3 +254,21 @@ VALUES
   ('RFID0009', 9, 1, '105-501 차량', NOW(), NOW()),
   ('RFID0010', 10, 1, '105-502 차량', NOW(), NOW())
 ON DUPLICATE KEY UPDATE updated_at = NOW();
+
+-- 센서 테이블 샘플 데이터 (ESP32 카메라 + IR/RFID/게이트)
+INSERT INTO sensors (guid, name, sensor_type, is_active, created_at, created_by)
+VALUES
+  -- ESP32 카메라 모듈
+  ('ESP32-CAM-01',    'CamStream',      'CAMERA',     1, NOW(), 'admin'),
+
+  -- ESP32 보드1: 입구/출구 차량 감지 센서
+  ('ESP32-S1-ENTRY01','EntryVehDetect', 'ENTRY_IR',   1, NOW(), 'admin'),
+  ('ESP32-S2-EXIT01', 'ExitVehDetect',  'EXIT_IR',    1, NOW(), 'admin'),
+
+  -- ESP32 보드1: RFID 리더기, 게이트 서보모터
+  ('ESP32-RFID-01',   'RFIDReader',     'RFID',       1, NOW(), 'admin'),
+  ('ESP32-GATE-01',   'GateServo',      'GATE_SERVO', 1, NOW(), 'admin')
+ON DUPLICATE KEY UPDATE
+  name = VALUES(name),
+  sensor_type = VALUES(sensor_type),
+  is_active = VALUES(is_active);

@@ -28,7 +28,9 @@ WiFiUDP udp;
 volatile bool camStreaming = false;
 const unsigned long REST_POLL_INTERVAL_MS = 1500;
 const unsigned long REST_CONFIG_POLL_INTERVAL_MS = 10000;
+const unsigned long REST_DEVICES_POLL_INTERVAL_MS = 10000;
 unsigned long lastConfigPoll = 0;
+unsigned long lastDevicesPoll = 0;
 const unsigned long FRAME_INTERVAL_MS = 100;
 unsigned long lastRestPoll = 0;
 unsigned long lastFrameTime = 0;
@@ -154,6 +156,59 @@ void restPollCommand() {
     }
 }
 
+// REST: /api/devices 호출 → 서버가 알고 있는 장비 목록(guid, name 등)을 확인용으로 출력
+void restPollDevices() {
+    HTTPClient http;
+    String url = "http://";
+    url += serverHostBuf;
+    url += ":";
+    url += String(restPortNum);
+    url += "/api/devices";
+    http.begin(url);
+    int code = http.GET();
+    String payload;
+    if (code == 200) {
+        payload = http.getString();
+    }
+    http.end();
+
+    if (code != 200 || payload.length() == 0) {
+        return;
+    }
+
+    // 아주 단순하게 JSON 문자열에서 "guid" / "name" 쌍을 찾아서 시리얼에 출력
+    int pos = 0;
+    while (true) {
+        int gIdx = payload.indexOf("\"guid\"", pos);
+        if (gIdx < 0) break;
+        int gValStart = payload.indexOf("\"", gIdx + 6);
+        if (gValStart < 0) break;
+        gValStart += 1;
+        int gValEnd = payload.indexOf("\"", gValStart);
+        if (gValEnd < 0) break;
+        String guid = payload.substring(gValStart, gValEnd);
+
+        int nIdx = payload.indexOf("\"name\"", gValEnd);
+        if (nIdx < 0) {
+            pos = gValEnd;
+            continue;
+        }
+        int nValStart = payload.indexOf("\"", nIdx + 6);
+        if (nValStart < 0) break;
+        nValStart += 1;
+        int nValEnd = payload.indexOf("\"", nValStart);
+        if (nValEnd < 0) break;
+        String name = payload.substring(nValStart, nValEnd);
+
+        Serial.print("[555] /api/devices → guid=");
+        Serial.print(guid);
+        Serial.print(" name=");
+        Serial.println(name);
+
+        pos = nValEnd;
+    }
+}
+
 void sendImageUDP(uint8_t* imageData, size_t imageSize, uint8_t fno) {
     size_t remainingSize = imageSize;
     uint8_t packetNo = 0;
@@ -258,6 +313,10 @@ void loop() {
     if (millis() - lastConfigPoll >= REST_CONFIG_POLL_INTERVAL_MS) {
         lastConfigPoll = millis();
         restPollConfig();
+    }
+    if (millis() - lastDevicesPoll >= REST_DEVICES_POLL_INTERVAL_MS) {
+      lastDevicesPoll = millis();
+      restPollDevices();
     }
     delay(10);
 }

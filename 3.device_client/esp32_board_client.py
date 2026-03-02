@@ -38,6 +38,7 @@ class Esp32BoardClient:
         self._sock: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
+        self._connected = False
 
     def start(self) -> None:
         self._running = True
@@ -51,6 +52,7 @@ class Esp32BoardClient:
                 self._sock.settimeout(5.0)
                 self._sock.connect((self.host, self.port))
                 print(f"[{self.name}] Connected to {self.host}:{self.port}")
+                self._connected = True
                 buffer = ""
                 while self._running:
                     data = self._sock.recv(1024)
@@ -77,6 +79,7 @@ class Esp32BoardClient:
                     except Exception:
                         pass
                     self._sock = None
+                self._connected = False
                 if self._running:
                     import time
 
@@ -99,6 +102,11 @@ class Esp32BoardClient:
             except Exception:
                 pass
             self._sock = None
+        self._connected = False
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
 
 
 class Esp32BoardManager:
@@ -136,4 +144,7 @@ class Esp32BoardManager:
     def stop(self) -> None:
         self.board1.stop()
         self.board2.stop()
+
+    def has_any_connection(self) -> bool:
+        return self.board1.is_connected or self.board2.is_connected
 
