@@ -1,0 +1,6 @@
+#if 1 // Debug Home
+const char* serverIP = "192.168.25.35";
+#else
+const char* serverIP = "192.168.25.5";
+#endif
+포트: 8080 (IR+RFID+Motor 통합)

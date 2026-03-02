@@ -1,0 +1,13 @@
+#if 1 //Debug Home Mode
+const char* ssid = "iptime_WiFiCE6D";
+const char* password = "!Tony6251@";
+
+const char* serverIP = "192.168.25.35"; // PyQt6 서버(PC)의 IP 주소 //192.168.25.34 ~ 35
+
+#else
+const char *ssid     = "addinedu_201class_2-2.4G";   // 2.4G WiFi SSID
+const char *password = "201class2!";                 // WiFi 비밀번호
+
+const char* serverIP = "192.168.25.5";               // 디바이스 PC IP
+
+#endif

@@ -1,0 +1,12 @@
+pip install pytesseract
+
+sudo apt install tesseract-ocr
+sudo apt install tesseract-ocr tesseract-ocr-kor
+
+https://github.com/addinedu-physicalai-1st/iot-repo-2.git
+
+192.168.25.54 78:E3:6D:0A:A0:D4 무선연결 (2.4GHz) : 수동할당 esp32-0AA0D4 (입구/출구 제어기)
+
+192.168.25.55 D4:E9:F4:A1:85:64 무선연결 (2.4GHz) : 수동할당 esp32-cam-A18564 (입구 LPR)
+
+esp32-cam-A18564
