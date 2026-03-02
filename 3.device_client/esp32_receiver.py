@@ -1,5 +1,6 @@
 import socket
 import threading
+import time
 from typing import Callable, Optional
 
 import cv2
@@ -23,6 +24,7 @@ class Esp32UdpReceiver:
         self._sock: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
+        self._last_frame_ts: float = 0.0
 
     def start(self) -> None:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -88,6 +90,7 @@ class Esp32UdpReceiver:
                         if img is not None and self.on_frame:
                             self.on_frame(f_no, img)
                             last_frame_no = f_no
+                            self._last_frame_ts = time.time()
 
                     # 정리: 현재 프레임 이하 모두 삭제
                     frames = {k: v for k, v in frames.items() if k > f_no}
@@ -99,4 +102,12 @@ class Esp32UdpReceiver:
         if self._sock:
             self._sock.close()
             self._sock = None
+
+    def has_recent_frame(self, timeout_sec: float = 5.0) -> bool:
+        """
+        최근 timeout_sec 초 이내에 카메라 프레임을 받은 적이 있는지 여부.
+        """
+        if self._last_frame_ts <= 0:
+            return False
+        return (time.time() - self._last_frame_ts) <= timeout_sec
 

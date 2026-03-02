@@ -52,6 +52,11 @@ class DeviceClientSettings:
     def esp32_2_port(self) -> int:
         return int(os.getenv("ESP32_2_PORT", "9002"))
 
+    @property
+    def device_no(self) -> str:
+        # device_clients 테이블과 매칭되는 device_no
+        return os.getenv("device_no", "DC-001")
+
 
 settings = DeviceClientSettings()
 

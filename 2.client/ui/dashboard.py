@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 
 from api_client import ApiClient
 from ui.resident_manager import ResidentManagerWindow
+from ui.sensor_manager import SensorManagerWindow
 
 
 class DashboardWindow(QMainWindow):
@@ -27,6 +28,7 @@ class DashboardWindow(QMainWindow):
         super().__init__()
         self.api = ApiClient()
         self._resident_window: ResidentManagerWindow | None = None
+        self._sensor_window: SensorManagerWindow | None = None
 
         self.setWindowTitle("스마트 주차장 관리 시스템 - 대시보드")
         self.resize(1200, 700)
@@ -159,12 +161,14 @@ class DashboardWindow(QMainWindow):
         right_frame.setLayout(right_vlayout)
 
         # 장비 목록
-        devices_box = QGroupBox("장비 목록")
+        devices_box = QGroupBox("장비 목록 (연결 방식 / 포트 / 상태)")
         devices_layout = QVBoxLayout()
         devices_box.setLayout(devices_layout)
 
-        self.table_devices = QTableWidget(0, 4)
-        self.table_devices.setHorizontalHeaderLabels(["ID", "이름", "타입", "IP"])
+        self.table_devices = QTableWidget(0, 7)
+        self.table_devices.setHorizontalHeaderLabels(
+            ["ID", "이름", "타입", "IP", "연결방식", "PortInfo", "연결 상태"],
+        )
         self.table_devices.horizontalHeader().setStretchLastSection(True)
 
         devices_layout.addWidget(self.table_devices)
@@ -254,6 +258,12 @@ class DashboardWindow(QMainWindow):
         )
         btn_layout.addWidget(self.button_manage_residents)
 
+        self.button_manage_sensors = QPushButton("장비관리 / 센서 관리")
+        self.button_manage_sensors.clicked.connect(
+            self.open_sensor_manager,
+        )
+        btn_layout.addWidget(self.button_manage_sensors)
+
         btn_layout.addStretch()
         main_layout.addLayout(btn_layout)
 
@@ -274,6 +284,13 @@ class DashboardWindow(QMainWindow):
         self._resident_window.show()
         self._resident_window.raise_()
         self._resident_window.activateWindow()
+
+    def open_sensor_manager(self) -> None:
+        if self._sensor_window is None:
+            self._sensor_window = SensorManagerWindow()
+        self._sensor_window.show()
+        self._sensor_window.raise_()
+        self._sensor_window.activateWindow()
 
     def refresh_all(self) -> None:
         try:
@@ -380,6 +397,32 @@ class DashboardWindow(QMainWindow):
             self.table_devices.setItem(
                 row, 3, QTableWidgetItem(dev.get("ip_address", "") or "")
             )
+            # 연결 방식: connection_type / detail / control_method
+            conn_str_parts: list[str] = []
+            if dev.get("connection_type"):
+                conn_str_parts.append(str(dev.get("connection_type")))
+            if dev.get("connection_detail"):
+                conn_str_parts.append(str(dev.get("connection_detail")))
+            if dev.get("control_method"):
+                conn_str_parts.append(str(dev.get("control_method")))
+            conn_str = " / ".join(conn_str_parts) if conn_str_parts else ""
+            self.table_devices.setItem(row, 4, QTableWidgetItem(conn_str))
+
+            # PortInfo (ethernet: port, serial: 포트명)
+            self.table_devices.setItem(
+                row,
+                5,
+                QTableWidgetItem(dev.get("port_info", "") or ""),
+            )
+
+            # 연결 상태 (is_connected)
+            is_conn = bool(dev.get("is_connected"))
+            status_item = QTableWidgetItem("연결됨" if is_conn else "미연결")
+            if is_conn:
+                status_item.setBackground(Qt.GlobalColor.darkGreen)
+            else:
+                status_item.setBackground(Qt.GlobalColor.darkRed)
+            self.table_devices.setItem(row, 6, status_item)
 
     def update_events(self, events: List[Dict[str, Any]]) -> None:
         if not events:

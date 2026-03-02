@@ -1,3 +1,30 @@
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QLabel, QMainWindow, QVBoxLayout, QWidget
+
+
+class ResidentManagerWindow(QMainWindow):
+    """
+    입주민 / 차량 / RFID 관리 화면.
+
+    현재는 센서 관리 UI만 우선 구현되어 있어,
+    이 창은 간단한 플레이스홀더로 두었습니다.
+    추후 필요 시 상세 CRUD 기능을 채워 넣으면 됩니다.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("입주민 / 차량 / RFID 관리 (준비중)")
+        self.resize(600, 400)
+
+        root = QWidget()
+        self.setCentralWidget(root)
+        layout = QVBoxLayout()
+        root.setLayout(layout)
+
+        label = QLabel("입주민 / 차량 / RFID 관리 화면은 추후 확장 예정입니다.")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(label)
+
 from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import Qt

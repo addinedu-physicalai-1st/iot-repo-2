@@ -27,6 +27,30 @@ class ApiClient:
         resp.raise_for_status()
         return resp.json()
 
+    # ─── 센서 API ──────────────────────────────────────────────
+    def list_sensors(self) -> List[Dict[str, Any]]:
+        resp = self._client.get("/sensors/")
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_sensor(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        resp = self._client.post("/sensors/", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    def update_sensor(
+        self,
+        sensor_id: int,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        resp = self._client.put(f"/sensors/{sensor_id}", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    def deactivate_sensor(self, sensor_id: int) -> None:
+        resp = self._client.delete(f"/sensors/{sensor_id}")
+        resp.raise_for_status()
+
     def list_residents(self) -> List[Dict[str, Any]]:
         resp = self._client.get("/residents/")
         resp.raise_for_status()

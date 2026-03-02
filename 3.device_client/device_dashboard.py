@@ -1,6 +1,8 @@
 from typing import Dict, List
 
 import cv2
+import json
+import requests
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
@@ -20,8 +22,9 @@ from PyQt6.QtWidgets import (
 
 from api_client import DeviceApiClient
 from arduino_client import ArduinoClient
-from esp32_receiver import Esp32UdpReceiver
+from config import settings
 from esp32_board_client import Esp32BoardManager
+from esp32_receiver import Esp32UdpReceiver
 
 
 class DeviceDashboardWindow(QMainWindow):
@@ -113,6 +116,27 @@ class DeviceDashboardWindow(QMainWindow):
 
         main_layout.addWidget(status_box)
 
+        # 디바이스 접속 리스트
+        conn_box = QGroupBox("디바이스 접속 리스트")
+        conn_layout = QVBoxLayout()
+        conn_box.setLayout(conn_layout)
+
+        self.table_conns = QTableWidget(0, 6)
+        self.table_conns.setHorizontalHeaderLabels(
+            ["ID", "이름", "타입", "연결방식", "PortInfo", "연결 상태"],
+        )
+        self.table_conns.horizontalHeader().setStretchLastSection(True)
+        conn_layout.addWidget(self.table_conns)
+
+        conn_btn_row = QHBoxLayout()
+        self.btn_refresh_conns = QPushButton("디바이스 접속 상태 새로고침")
+        self.btn_refresh_conns.clicked.connect(self.refresh_device_connections)
+        conn_btn_row.addWidget(self.btn_refresh_conns)
+        conn_btn_row.addStretch()
+        conn_layout.addLayout(conn_btn_row)
+
+        main_layout.addWidget(conn_box)
+
         # 중앙: 좌측 슬롯 상태, 우측 카메라 / 장비
         center_layout = QHBoxLayout()
         main_layout.addLayout(center_layout, 1)
@@ -166,6 +190,7 @@ class DeviceDashboardWindow(QMainWindow):
         # 초기 데이터 로드 및 통신 시작
         self.load_slots_from_server()
         self.start_comm()
+        self.refresh_device_connections()
 
         # 주기적으로 서버 상태 체크 (간단한 헬스 모니터)
         self.timer = QTimer(self)
@@ -173,6 +198,58 @@ class DeviceDashboardWindow(QMainWindow):
         self.timer.timeout.connect(self.update_server_status)
         self.timer.start()
         self.update_server_status()
+
+        # 주기적으로 디바이스 접속 상태를 재확인하고 서버에 반영
+        self.conn_timer = QTimer(self)
+        self.conn_timer.setInterval(5000)
+        self.conn_timer.timeout.connect(self.refresh_device_connections)
+        self.conn_timer.start()
+
+    # ───────── LPR 카메라 서버 연결 헬스체크 (REST) ─────────
+    def _check_lpr_http_alive(self, device: dict) -> bool:
+        """
+        UDP 프레임이 없을 때, LPR 카메라 서버의 REST 포트를 헬스체크하여
+        장비가 살아 있는지 보조적으로 판단한다.
+        config: {"rest_port":5555,"udp_port":7072}
+        """
+        ip = device.get("ip_address")
+        if not ip:
+            return False
+        rest_port = None
+        cfg = device.get("config")
+        if isinstance(cfg, str) and cfg:
+            try:
+                cfg_obj = json.loads(cfg)
+                rest_port = cfg_obj.get("rest_port")
+            except Exception:
+                rest_port = None
+        if not rest_port:
+            # port_info 에 REST 포트가 들어있는 경우도 고려
+            port_info = device.get("port_info")
+            if port_info and str(port_info).isdigit():
+                rest_port = int(port_info)
+        if not rest_port:
+            return False
+
+        # LPR 카메라 서버는 /health 가 아니라 /api/devices 등의 REST 엔드포인트를 제공하므로
+        # 가장 가벼운 GET /api/devices 로 생존 여부를 확인한다.
+        url = f"http://{ip}:{rest_port}/api/devices"
+        try:
+            resp = requests.get(url, timeout=1.5)
+            if resp.status_code != 200:
+                return False
+            # 응답 JSON 안에 devices 리스트에 guid/name 이 하나 이상 있으면
+            # ESP32-CAM 이 register/heartbeat/command 폴링으로 살아 있다고 판단.
+            try:
+                data = resp.json()
+            except Exception:
+                return False
+            devices = data.get("devices") if isinstance(data, dict) else None
+            if not isinstance(devices, list) or not devices:
+                return False
+            return True
+        except Exception:
+            return False
 
     def open_test_tabs_window(self) -> None:
         """ESP32 카메라 / IR·RFID·모터 테스트용 탭 윈도우를 연다."""
@@ -264,6 +341,133 @@ class DeviceDashboardWindow(QMainWindow):
             self.label_server.setText(f"서버: 연결됨 ({h.get('status', 'ok')})")
         except Exception as e:  # noqa: BLE001
             self.label_server.setText(f"서버: 연결 실패 ({e})")
+
+    def refresh_device_connections(self) -> None:
+        """
+        .env 의 device_no 와 device_clients 테이블을 매칭하여
+        이 device_client 가 관리하는 devices 들의 접속 상태를 조회/표시하고,
+        devices.is_connected 값을 업데이트한다.
+        """
+        try:
+            dc_list = self.api.list_device_clients()
+        except Exception as e:  # noqa: BLE001
+            self.statusBar().showMessage(f"device_clients 조회 실패: {e}", 3000)
+            return
+
+        dc = None
+        for item in dc_list:
+            if item.get("device_no") == settings.device_no:
+                dc = item
+                break
+        if not dc:
+            self.statusBar().showMessage(
+                f"device_no={settings.device_no} 에 해당하는 device_client 없음",
+                4000,
+            )
+            self.table_conns.setRowCount(0)
+            return
+
+        devices_ids_str = dc.get("devices_ids") or ""
+        if not devices_ids_str:
+            self.table_conns.setRowCount(0)
+            return
+        try:
+            target_ids = [
+                int(x.strip())
+                for x in devices_ids_str.split(",")
+                if x.strip()
+            ]
+        except ValueError:
+            self.statusBar().showMessage("devices_ids 파싱 실패", 3000)
+            return
+
+        try:
+            all_devices = self.api.list_devices()
+        except Exception as e:  # noqa: BLE001
+            self.statusBar().showMessage(f"devices 조회 실패: {e}", 3000)
+            return
+
+        dev_by_id: dict[int, dict] = {
+            int(d.get("id")): d for d in all_devices if d.get("id") is not None
+        }
+
+        rows: list[dict] = []
+        for did in target_ids:
+            d = dev_by_id.get(did)
+            if not d:
+                continue
+
+            connected_now = False
+            ctype = (d.get("connection_type") or "").lower()
+            if ctype == "serial":
+                connected_now = self.arduino is not None
+            elif ctype == "ethernet":
+                dtype = d.get("type") or ""
+                if dtype == "gate_controller":
+                    connected_now = (
+                        self.esp_boards is not None and self.esp_boards.has_any_connection()
+                    )
+                elif dtype == "lpr_camera_server":
+                    # 1차: UDP 프레임 기준
+                    connected_now = (
+                        self.esp32 is not None and self.esp32.has_recent_frame(timeout_sec=5.0)
+                    )
+                    # 2차: UDP 가 조용할 때 REST 헬스체크로 보조 판단
+                    if not connected_now:
+                        connected_now = self._check_lpr_http_alive(d)
+
+            # DB 의 is_connected 와 다르면 서버에 반영
+            if bool(d.get("is_connected")) != connected_now:
+                try:
+                    self.api.update_device_is_connected(d, connected_now)
+                    d["is_connected"] = connected_now
+                except Exception:
+                    # 실패해도 UI에는 현재 상태를 그대로 표시
+                    d["is_connected"] = connected_now
+
+            rows.append(d)
+
+        # 테이블 갱신
+        self.table_conns.setRowCount(len(rows))
+        for row, d in enumerate(rows):
+            self.table_conns.setItem(
+                row,
+                0,
+                QTableWidgetItem(str(d.get("id", ""))),
+            )
+            self.table_conns.setItem(
+                row,
+                1,
+                QTableWidgetItem(d.get("name", "")),
+            )
+            self.table_conns.setItem(
+                row,
+                2,
+                QTableWidgetItem(d.get("type", "")),
+            )
+
+            conn_parts: list[str] = []
+            if d.get("connection_type"):
+                conn_parts.append(str(d.get("connection_type")))
+            if d.get("connection_detail"):
+                conn_parts.append(str(d.get("connection_detail")))
+            if d.get("control_method"):
+                conn_parts.append(str(d.get("control_method")))
+            conn_str = " / ".join(conn_parts) if conn_parts else ""
+            self.table_conns.setItem(row, 3, QTableWidgetItem(conn_str))
+
+            self.table_conns.setItem(
+                row,
+                4,
+                QTableWidgetItem(d.get("port_info", "") or ""),
+            )
+
+            is_conn = bool(d.get("is_connected"))
+            status_item = QTableWidgetItem("연결됨" if is_conn else "미연결")
+            status_item.setBackground(
+                Qt.GlobalColor.darkGreen if is_conn else Qt.GlobalColor.darkRed,
+            )
+            self.table_conns.setItem(row, 5, status_item)
 
     # ───────── 슬롯/카메라 업데이트 (UI 쓰레드) ─────────
     def handle_slot_updated_ui(self, slot_name: str, occupied: bool) -> None:

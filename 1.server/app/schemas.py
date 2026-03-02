@@ -7,7 +7,14 @@ from pydantic import BaseModel
 class DeviceBase(BaseModel):
     name: str
     type: str
+    device_type: str  # 'CLIENT' or 'SERVER'
+    connection_type: str = "ethernet"
+    connection_detail: Optional[str] = None  # 예: 'tcp', 'udp,tcp'
+    control_method: Optional[str] = None     # 예: 'socket', 'restapi'
     ip_address: Optional[str] = None
+    port_info: Optional[str] = None
+    is_connected: bool = False
+    sensor_guids: Optional[str] = None
     config: Optional[str] = None
     is_active: bool = True
 
@@ -106,4 +113,44 @@ class DashboardSummary(BaseModel):
     # 관리 클라이언트에서 슬롯별 센서 상태(디바이스 클라에서 올린 것)를
     # 한 번에 볼 수 있도록 상세 슬롯 목록도 포함
     slots: List[ParkingSlotRead] = []
+
+
+class SensorBase(BaseModel):
+    guid: str
+    name: str
+    sensor_type: str
+    is_active: bool = True
+    created_by: str
+
+
+class SensorCreate(SensorBase):
+    pass
+
+
+class SensorRead(SensorBase):
+    id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class DeviceClientBase(BaseModel):
+    device_no: str
+    name: str
+    devices_ids: Optional[str] = None
+    is_active: bool = True
+
+
+class DeviceClientCreate(DeviceClientBase):
+    pass
+
+
+class DeviceClientRead(DeviceClientBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
 
