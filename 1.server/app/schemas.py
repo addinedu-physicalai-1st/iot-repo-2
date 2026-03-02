@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, List
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -57,6 +57,46 @@ class EventLogRead(BaseModel):
         from_attributes = True
 
 
+class ResidentBase(BaseModel):
+    unit_number: str
+    name: str
+    phone: str
+    car_plate: str
+
+
+class ResidentCreate(ResidentBase):
+    pass
+
+
+class ResidentRead(ResidentBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RfidCardBase(BaseModel):
+    card_uid: str
+    resident_id: Optional[int] = None
+    is_active: bool = True
+    description: Optional[str] = None
+
+
+class RfidCardCreate(RfidCardBase):
+    pass
+
+
+class RfidCardRead(RfidCardBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class DashboardSummary(BaseModel):
     total_slots: int
     occupied_slots: int
@@ -66,3 +106,4 @@ class DashboardSummary(BaseModel):
     # 관리 클라이언트에서 슬롯별 센서 상태(디바이스 클라에서 올린 것)를
     # 한 번에 볼 수 있도록 상세 슬롯 목록도 포함
     slots: List[ParkingSlotRead] = []
+

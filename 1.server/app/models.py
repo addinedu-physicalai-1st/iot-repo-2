@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Integer, String, Boolean, ForeignKey
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from .db import Base
@@ -18,7 +18,9 @@ class Device(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
     )
 
     events = relationship("EventLog", back_populates="device")
@@ -37,7 +39,9 @@ class ParkingSlot(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
     )
 
 
@@ -52,4 +56,46 @@ class EventLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     device = relationship("Device", back_populates="events")
+
+
+class Resident(Base):
+    __tablename__ = "residents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    unit_number = Column(String(20), nullable=False)  # 몇 호
+    name = Column(String(50), nullable=False)
+    phone = Column(String(20), nullable=False)
+    car_plate = Column(String(20), nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    rfid_cards = relationship(
+        "RfidCard",
+        back_populates="resident",
+        cascade="all, delete-orphan",
+    )
+
+
+class RfidCard(Base):
+    __tablename__ = "rfid_cards"
+
+    id = Column(Integer, primary_key=True, index=True)
+    card_uid = Column(String(64), unique=True, nullable=False)
+    resident_id = Column(Integer, ForeignKey("residents.id"), nullable=True)
+    is_active = Column(Boolean, default=True)
+    description = Column(String(100), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    resident = relationship("Resident", back_populates="rfid_cards")
 

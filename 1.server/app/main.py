@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import init_db
-from .routers import devices, parking
+from .routers import devices, parking, residents
 from .udp_listener import run_udp_server
 
 
@@ -44,4 +44,5 @@ async def health():
 
 app.include_router(devices.router)
 app.include_router(parking.router)
+app.include_router(residents.router)
 
