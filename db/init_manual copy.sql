@@ -138,7 +138,7 @@ INSERT INTO devices (
 VALUES
   -- 입구 차단기 컨트롤러: IR(입구/출구) + RFID + 게이트 서보 센서 포함
   (
-    '입차 차단기 컨트롤러_1',
+    '입차 차단기 컨트롤러',
     'gate_controller',
     'CLIENT',
     'ethernet',
@@ -148,7 +148,7 @@ VALUES
     '8080',
     1,
     0,
-    'ESP32-S1-ENTRY01,ESP32-RFID-01,ESP32-GATE-01',
+    'ESP32-S1-ENTRY01,ESP32-S2-EXIT01,ESP32-RFID-01,ESP32-GATE-01',
     '{"socket_port":8080}',
     NOW(),
     NOW()
