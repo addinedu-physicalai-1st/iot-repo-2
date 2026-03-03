@@ -162,11 +162,11 @@ VALUES
     'udp,tcp',
     'restapi',
     '192.168.25.55',
-    '5555', -- 주 통신 포트 (REST)
+    '80', -- 주 통신 포트 (REST)
     1,
     0,
     'ESP32-CAM-01',
-    '{"rest_port":5555,"udp_port":7072}',
+    '{"rest_port":80,"udp_port":7072}',
     NOW(),
     NOW()
   ),
