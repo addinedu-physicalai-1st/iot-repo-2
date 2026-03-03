@@ -302,6 +302,7 @@ class DashboardWindow(QMainWindow):
 
         self.update_summary(dashboard)
         self.update_devices_table(devices)
+        self.update_device_status_summary(devices)
         self.update_events(dashboard.get("recent_events", []))
         self.statusBar().showMessage("데이터 갱신 완료", 2000)
 
@@ -423,6 +424,28 @@ class DashboardWindow(QMainWindow):
             else:
                 status_item.setBackground(Qt.GlobalColor.darkRed)
             self.table_devices.setItem(row, 6, status_item)
+
+    def update_device_status_summary(self, devices: List[Dict[str, Any]]) -> None:
+        """
+        devices 목록을 바탕으로 게이트 컨트롤러(esp32_board1) 등의
+        연결 상태를 상단 요약 UI(차단기 상태/센서 버튼)에 반영한다.
+        """
+        gate_connected = False
+
+        for dev in devices:
+            dtype = (dev.get("type") or "").lower()
+            if dtype == "gate_controller":
+                gate_connected = bool(dev.get("is_connected"))
+                break
+
+        if gate_connected:
+            # 차단기 장비가 연결된 경우: '닫힘' 상태를 기본으로 두고 콤보박스 활성화
+            self.combo_gate_status.setCurrentIndex(1)  # 닫힘
+        else:
+            # 장비 미연결 시: '연결 안됨' 표시 및 콤보박스 잠금
+            self.combo_gate_status.setCurrentIndex(0)  # 연결 안됨
+
+        self._update_gate_combo_enabled()
 
     def update_events(self, events: List[Dict[str, Any]]) -> None:
         if not events:
