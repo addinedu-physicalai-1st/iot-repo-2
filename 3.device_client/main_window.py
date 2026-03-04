@@ -20,6 +20,7 @@ from device_manager import DeviceManager
 from info_manager import InfoManager
 from transmission_manager import TransmissionManager
 from gate_test_dialog import GateTestDialog
+from parking_guide_test_dialog import ParkingGuideTestDialog
 
 
 class MainWindow(QMainWindow):
@@ -44,6 +45,7 @@ class MainWindow(QMainWindow):
         self._arch_mgr = architect_manager
         self._tx = transmission_manager
         self._gate_dialog: GateTestDialog | None = None
+        self._parking_dialog: ParkingGuideTestDialog | None = None
 
         self.setWindowTitle("스마트 주차장 - 디바이스 클라이언트 대시보드")
         self.resize(1100, 700)
@@ -96,6 +98,10 @@ class MainWindow(QMainWindow):
         self.btn_gate_test.clicked.connect(self.open_gate_test_dialog)
         btn_row.addWidget(self.btn_gate_test)
 
+        self.btn_parking_test = QPushButton("esp32_board2 파킹 가이드 테스트")
+        self.btn_parking_test.clicked.connect(self.open_parking_guide_test_dialog)
+        btn_row.addWidget(self.btn_parking_test)
+
         btn_row.addStretch()
         devices_layout.addLayout(btn_row)
 
@@ -130,6 +136,14 @@ class MainWindow(QMainWindow):
         self._gate_dialog.show()
         self._gate_dialog.raise_()
         self._gate_dialog.activateWindow()
+
+    def open_parking_guide_test_dialog(self) -> None:
+        """esp32_board2(파킹 가이드) 이벤트를 확인하는 팝업을 연다."""
+        if self._parking_dialog is None:
+            self._parking_dialog = ParkingGuideTestDialog(self._device_mgr, self)
+        self._parking_dialog.show()
+        self._parking_dialog.raise_()
+        self._parking_dialog.activateWindow()
 
     def _update_summary(self) -> None:
         health = self._info.server_health or {}

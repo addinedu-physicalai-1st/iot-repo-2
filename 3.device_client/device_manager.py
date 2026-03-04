@@ -61,9 +61,10 @@ class DeviceManager:
         if self._gate_connected == connected:
             return
         self._gate_connected = connected
-        # 서버(FastAPI)에 gate_controller 장비 연결 상태 반영
+        # 서버(FastAPI)에 gate_controller / street_parking_controller 장비 연결 상태 반영
         try:
             self._tx.set_gate_connected(connected)
+            self._tx.set_street_parking_connected(connected)
         except Exception:
             # 서버 반영 실패 시에도 로컬 로그는 남긴다.
             state = "연결" if connected else "해제"
