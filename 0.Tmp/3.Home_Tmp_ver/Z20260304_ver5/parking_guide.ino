@@ -34,9 +34,9 @@ const unsigned long PING_INTERVAL_MS = 5000;
 const unsigned long PONG_TIMEOUT_MS = 5000;
 const unsigned long RECONNECT_INTERVAL_MS = 3000;
 
-// --- //lcd 1602 Pins ---
+// --- LCD 1602 Pins ---
 // RS = 18, EN = 19, D4 = 21, D5 = 22, D6 = 23, D7 = 27
-//LiquidCrystal lcd(18, 19, 21, 22, 23, 27);
+LiquidCrystal lcd(18, 19, 21, 22, 23, 27);
 
 // --- IR Sensor Pins ---
 const int irPin1 = 25;
@@ -92,10 +92,10 @@ void sendParkingEvent(uint8_t spotNum, const char* srcName, bool isOccupied) {
 void setup() {
   Serial.begin(115200);
 
-  //lcd.begin(16, 2);
-  //lcd.print("System Starting.");
+  lcd.begin(16, 2);
+  lcd.print("System Starting.");
   delay(1500);
-  //lcd.clear();
+  lcd.clear();
 
   pinMode(irPin1, INPUT);
   pinMode(irPin2, INPUT);
@@ -107,28 +107,22 @@ void setup() {
   pinMode(ledPin3, OUTPUT);
   pinMode(ledPin4, OUTPUT);
   
-  //lcd.print("Connecting WiFi");
+  lcd.print("Connecting WiFi");
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
       delay(500);
       Serial.print(".");
   }
   Serial.println("\nWiFi Connected.");
-
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP()); // 이 줄을 추가하면 IP가 찍힙니다.
-
-
-
-  //lcd.clear();
-  //lcd.print("WiFi Connected!!");
+  lcd.clear();
+  lcd.print("WiFi Connected!!");
   delay(1000);
-  //lcd.clear();
+  lcd.clear();
 }
 
 void loop() {
   // ---------------------------------------------------------
-  // 1. ALWAYS Read Sensors and Update //lcd (Regardless of Network)
+  // 1. ALWAYS Read Sensors and Update LCD (Regardless of Network)
   // ---------------------------------------------------------
   int state1 = digitalRead(irPin1);
   int state2 = digitalRead(irPin2);
@@ -140,12 +134,12 @@ void loop() {
   digitalWrite(ledPin3, (state3 == DETECTED_STATE) ? LOW : HIGH);
   digitalWrite(ledPin4, (state4 == DETECTED_STATE) ? LOW : HIGH);
 
-  //lcd.setCursor(0, 0);
-  //lcd.print("S1:"); //lcd.print((state1 == DETECTED_STATE) ? "OCC " : "EMP ");
-  //lcd.print(" S2:"); //lcd.print((state2 == DETECTED_STATE) ? "OCC " : "EMP ");
-  //lcd.setCursor(0, 1);
-  //lcd.print("S3:"); //lcd.print((state3 == DETECTED_STATE) ? "OCC " : "EMP ");
-  //lcd.print(" S4:"); //lcd.print((state4 == DETECTED_STATE) ? "OCC " : "EMP ");
+  lcd.setCursor(0, 0);
+  lcd.print("S1:"); lcd.print((state1 == DETECTED_STATE) ? "OCC " : "EMP ");
+  lcd.print(" S2:"); lcd.print((state2 == DETECTED_STATE) ? "OCC " : "EMP ");
+  lcd.setCursor(0, 1);
+  lcd.print("S3:"); lcd.print((state3 == DETECTED_STATE) ? "OCC " : "EMP ");
+  lcd.print(" S4:"); lcd.print((state4 == DETECTED_STATE) ? "OCC " : "EMP ");
 
   // ---------------------------------------------------------
   // 2. Handle Server Connection Asynchronously
