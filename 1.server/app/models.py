@@ -20,6 +20,8 @@ class Device(Base):
     port_info = Column(String(50), nullable=True)  # ethernet: port, serial: port name
     is_connected = Column(Boolean, default=False)
     sensor_guids = Column(String(255), nullable=True)
+    # devices.device_guid 컬럼과 매핑 (장비 단위 고유 GUID)
+    device_guid = Column(String(64), nullable=True, index=True)
     config = Column(String(255), nullable=True)  # JSON 문자열로 간단 설정 저장
     is_active = Column(Boolean, default=True)
 

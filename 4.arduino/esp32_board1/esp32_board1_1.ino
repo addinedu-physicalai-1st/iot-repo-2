@@ -25,14 +25,15 @@ const int INIT_SLEEP_MS = 3000;
 const int MAX_RETRY = 5;
 
 // 패킷 타입 (4=장비목록 전송)
-#define TYPE_PING        0xFE
-#define TYPE_PONG        0xFD
-#define TYPE_IR_EVENT    0
-#define TYPE_RFID        1
-#define TYPE_CMD_OPEN    2
-#define TYPE_CMD_CLOSE   5   // 서버 → 클라이언트: 게이트 닫기
-#define TYPE_CMD_WRITE   3
-#define TYPE_DEVICE_LIST 4   // 접속 시 서버로 장비 목록(GUID, 센서명) 전송
+#define TYPE_PING          0xFE
+#define TYPE_PONG          0xFD
+#define TYPE_IR_EVENT      0
+#define TYPE_RFID          1
+#define TYPE_CMD_OPEN      2
+#define TYPE_CMD_CLOSE     5   // 서버 → 클라이언트: 게이트 닫기
+#define TYPE_CMD_WRITE     3
+#define TYPE_DEVICE_LIST   4   // 접속 시 서버로 장비 목록(GUID, 센서명) 전송
+#define TYPE_DEV_REGISTER  6   // 장비 등록 패킷 (device_guid, device_name)
 
 #define EV_ENTRY         1
 #define EV_EXIT          2
@@ -79,6 +80,11 @@ const unsigned long PONG_TIMEOUT_MS = 5000;
 #define I2C_SDA2 25
 #define I2C_SCL2 26
 
+// 디바이스/센서 정보
+// - DEVICE_GUID / DEVICE_NAME 은 devices 테이블과 1:1 매칭
+#define DEVICE_NAME "입출구 차단기 컨트롤러_1"
+#define DEVICE_GUID "DEV-GATE-1"
+
 // 센서별 GUID(16자) + 영문 센서명(14자). 접속 시 서버 전송 → DB/리스트 연동
 #define DEVICE_COUNT 4
 static const struct { const char guid[17]; const char name[15]; } DEVICE_LIST[DEVICE_COUNT] = {
@@ -103,6 +109,19 @@ void sendDeviceList() {
         delay(20);
     }
     Serial.println("Device list sent to server.");
+}
+
+// 장비 등록 패킷 전송: DEVICE_GUID / DEVICE_NAME / 현재 IP
+void sendDeviceRegister() {
+    if (!client.connected()) return;
+    memset(&txPkt, 0, sizeof(txPkt));
+    txPkt.type = TYPE_DEV_REGISTER;
+    // payload[0..15] : device_guid (최대 16바이트)
+    strncpy((char*)&txPkt.payload[0], DEVICE_GUID, 16);
+    // payload[16..31] : device_name (최대 16바이트, 잘릴 수 있음)
+    strncpy((char*)&txPkt.payload[16], DEVICE_NAME, 16);
+    client.write((uint8_t*)&txPkt, sizeof(UnifiedPacket));
+    Serial.printf("Sent device register: guid=%s name=%s\n", DEVICE_GUID, DEVICE_NAME);
 }
 
 void sendEvent(uint8_t ev, const char* src, const char* ext) {
@@ -230,8 +249,11 @@ void setup() {
     Serial.print("IP Address: ");
     Serial.println(WiFi.localIP()); // 이 줄을 추가하면 IP가 찍힙니다.
 
-    if (client.connect(serverIP, serverPort))
+    if (client.connect(serverIP, serverPort)) {
         Serial.println("Server Connected.");
+        // 장비 등록 정보 전송 (device_guid, device_name)
+        sendDeviceRegister();
+    }
     Serial.println("Init setup : End");
 }
 

@@ -24,6 +24,8 @@ class DeviceManager:
         self._gate_logs: list[str] = []
         self._gate_devices: list[dict] = []
         self._gate_connected: bool = False
+        # parking_slots, device 등록 정보 등을 위한 내부 상태
+        self._parking_state: dict[str, bool] = {}
 
     def start(self) -> None:
         """
@@ -37,6 +39,7 @@ class DeviceManager:
                 on_log=self._append_gate_log,
                 on_device_list=self._set_gate_devices,
                 on_state_change=self._on_gate_state_change,
+                on_register=self._on_device_register,
             )
             self._gate_server.start()
 
@@ -90,6 +93,27 @@ class DeviceManager:
             # 서버 반영 실패 시에도 로컬 로그는 남긴다.
             state = "연결" if connected else "해제"
             self._append_gate_log(f"[GATE] 서버 반영 실패 (상태={state})")
+
+    # ───────── 장비 등록(DEVICE_GUID 기반 IP 갱신) ─────────
+    def _on_device_register(self, device_guid: str, device_name: str, ip: str) -> None:
+        """
+        ESP32 보드에서 TYPE_DEV_REGISTER 패킷을 보냈을 때 호출된다.
+
+        - device_guid / device_name / ip 를 받아서 TransmissionManager 에 전달
+        - FastAPI → DB 의 devices.ip_address 를 갱신 (DHCP 대응)
+        """
+        self._append_gate_log(
+            f"[REG] 등록 요청 수신 guid={device_guid} name={device_name} ip={ip}"
+        )
+        try:
+            self._tx.update_device_ip_by_guid(device_guid, ip, device_name=device_name)
+            self._append_gate_log(
+                f"[REG] DB ip_address 갱신 완료 guid={device_guid} → {ip}"
+            )
+        except Exception as exc:
+            self._append_gate_log(
+                f"[REG] DB ip_address 갱신 실패 guid={device_guid} ({exc})"
+            )
 
     def get_gate_logs(self) -> list[str]:
         return list(self._gate_logs)

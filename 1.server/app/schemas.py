@@ -15,6 +15,8 @@ class DeviceBase(BaseModel):
     port_info: Optional[str] = None
     is_connected: bool = False
     sensor_guids: Optional[str] = None
+    # devices.device_guid 컬럼과 매핑 (장비 단위 고유 GUID)
+    device_guid: Optional[str] = None
     config: Optional[str] = None
     is_active: bool = True
 
@@ -30,6 +32,12 @@ class DeviceRead(DeviceBase):
 
     class Config:
         from_attributes = True
+
+
+class DeviceIpUpdate(BaseModel):
+    """device_guid 기준으로 IP 만 갱신할 때 사용하는 스키마."""
+
+    ip_address: str
 
 
 class ParkingSlotBase(BaseModel):
