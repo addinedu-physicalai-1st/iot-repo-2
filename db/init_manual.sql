@@ -28,10 +28,12 @@ CREATE TABLE devices (
   is_active       TINYINT(1)   NOT NULL DEFAULT 1,
   is_connected    TINYINT(1)   NOT NULL DEFAULT 0,
   sensor_guids    VARCHAR(255) NULL,             -- 이 장비에 연결된 센서 GUID 리스트(쉼표 구분)
+  device_guid     VARCHAR(64)  NULL,             -- 장비 자체를 구분하는 GUID (옵션)
   config          VARCHAR(255) NULL,             -- JSON 문자열 등
   created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  KEY idx_devices_id (id)
+  KEY idx_devices_id (id),
+  KEY idx_devices_guid (device_guid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 디바이스 클라이언트 테이블 (3.device_client PC와 연동되는 장비 묶음)
@@ -133,6 +135,7 @@ INSERT INTO devices (
   is_active,
   is_connected,
   sensor_guids,
+  device_guid,
   config,
   created_at,
   updated_at
@@ -151,6 +154,7 @@ VALUES
     1,
     0,
     'ESP32-S1-ENTRY01,ESP32-RFID-01,ESP32-GATE-01',
+    'DEV-GATE-1',
     '{"socket_port":8080}',
     NOW(),
     NOW()
@@ -168,6 +172,7 @@ VALUES
     1,
     0,
     'ESP32-S2-EXIT01,ESP32-LED-01',
+    'DEV-GATE-2',
     '{"socket_port":8080}',
     NOW(),
     NOW()
@@ -186,6 +191,7 @@ VALUES
     1,
     0,
     'ESP32-CAM-01',
+    'DEV-LPR-1',
     '{"rest_port":80,"udp_port":7072}',
     NOW(),
     NOW()
@@ -202,6 +208,7 @@ VALUES
   1,
   0,
   'ESP32-IR-PARKINGLOT01,ESP32-IR-PARKINGLOT02,ESP32-IR-PARKINGLOT03,ESP32-IR-PARKINGLOT04',
+  'DEV-STREET-1',
   '{"socket_port":8080}',
   NOW(), NOW()
 ),
@@ -217,6 +224,7 @@ VALUES
     'ttyUSB0', -- 예시: USB 직렬 포트명
     1,
     0,
+    NULL,
     NULL,
     '{"serial_port":"ttyUSB0"}',
     NOW(),
