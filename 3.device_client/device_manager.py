@@ -40,6 +40,16 @@ class DeviceManager:
             )
             self._gate_server.start()
 
+        # 앱 기동 직후에는 DB 에 남아있던 이전 연결 상태를 신뢰하지 않고,
+        # gate_controller / street_parking_controller 를 모두 끊김으로 초기화한다.
+        # 이후 실제 소켓 연결/keep-alive 기준으로만 is_connected 를 다시 세팅.
+        try:
+            self._tx.set_gate_connected(False)
+            self._tx.set_street_parking_connected(False)
+        except Exception:
+            # 초기화 실패는 치명적이지 않으므로 로그만 남기고 무시
+            self._append_gate_log("[GATE] 초기 연결 상태 리셋 실패 (DB)")
+
     def stop(self) -> None:
         """start 에서 시작한 장치 관련 스레드를 종료."""
         if self._gate_server is not None:
@@ -63,8 +73,19 @@ class DeviceManager:
         self._gate_connected = connected
         # 서버(FastAPI)에 gate_controller / street_parking_controller 장비 연결 상태 반영
         try:
-            self._tx.set_gate_connected(connected)
-            self._tx.set_street_parking_connected(connected)
+            ip = None
+            if self._gate_server is not None:
+                # 최근 연결된 ESP32 보드의 IP
+                ip = getattr(self._gate_server, "_current_ip", None)
+
+            if ip:
+                # 특정 IP 와 매칭되는 장비만 연결 상태 반영
+                self._tx.set_gate_connected_by_ip(ip, connected)
+                self._tx.set_street_parking_connected_by_ip(ip, connected)
+            else:
+                # IP 정보를 얻지 못한 경우, 타입 전체에 대해 fallback 처리
+                self._tx.set_gate_connected(connected)
+                self._tx.set_street_parking_connected(connected)
         except Exception:
             # 서버 반영 실패 시에도 로컬 로그는 남긴다.
             state = "연결" if connected else "해제"
