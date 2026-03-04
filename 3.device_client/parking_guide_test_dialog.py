@@ -55,14 +55,14 @@ class ParkingGuideTestDialog(QDialog):
         self.refresh_logs()
 
     def refresh_logs(self) -> None:
+        """
+        DeviceManager 에서 수집한 전체 게이트/파킹 로그를 그대로 보여준다.
+
+        - SPOT_x 이벤트뿐 아니라 [REG], [GATE] 등 등록/연결 상태 로그도
+          함께 확인할 수 있도록 필터링을 제거했다.
+        """
         logs = self._dev_mgr.get_gate_logs()
-        # SPOT_1~4, OCCUPIED/EMPTY, PARKING 키워드가 포함된 줄만 표시
-        filtered = [
-            line
-            for line in logs
-            if "SPOT_" in line or "OCCUPIED" in line or "EMPTY" in line or "PARKING" in line
-        ]
         self.text_log.clear()
-        if filtered:
-            self.text_log.append("\n".join(filtered))
+        if logs:
+            self.text_log.append("\n".join(logs))
 

@@ -33,6 +33,7 @@ TYPE_CMD_OPEN = 2
 TYPE_CMD_CLOSE = 5
 TYPE_CMD_WRITE = 3
 TYPE_DEVICE_LIST = 4
+TYPE_DEV_REGISTER = 6  # 장비 등록 패킷 (device_guid, device_name)
 
 EV_NAMES = {
     1: "ENTRY_DETECTED",
@@ -63,6 +64,7 @@ class Esp32GateServer(threading.Thread):
         on_log: Optional[Callable[[str], None]] = None,
         on_device_list: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
         on_state_change: Optional[Callable[[bool], None]] = None,
+        on_register: Optional[Callable[[str, str, str], None]] = None,
     ) -> None:
         super().__init__(daemon=True)
         self._host = host
@@ -70,6 +72,8 @@ class Esp32GateServer(threading.Thread):
         self._on_log = on_log or (lambda msg: None)
         self._on_device_list = on_device_list or (lambda lst: None)
         self._on_state_change = on_state_change or (lambda connected: None)
+        # device_guid, device_name, ip 를 전달하는 콜백
+        self._on_register = on_register or (lambda guid, name, ip: None)
 
         self._device_list_buf: Dict[int, Dict[str, str]] = {}
         self._client: Optional[socket.socket] = None
@@ -209,6 +213,17 @@ class Esp32GateServer(threading.Thread):
                         lst = [self._device_list_buf[i] for i in range(total)]
                         self._device_list_buf.clear()
                         self._on_device_list(lst)
+                    continue
+
+                # 5. 장비 등록 패킷 (device_guid, device_name, ip)
+                if typ == TYPE_DEV_REGISTER:
+                    guid = payload[0:16].decode("utf-8", errors="ignore").strip("\x00 ")
+                    name = payload[16:32].decode("utf-8", errors="ignore").strip("\x00 ")
+                    ip = addr[0]
+                    self._on_log(
+                        f"[REG] device_register 수신 guid={guid} name={name} ip={ip}"
+                    )
+                    self._on_register(guid, name, ip)
                     continue
         finally:
             try:

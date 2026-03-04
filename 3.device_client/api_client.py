@@ -84,6 +84,47 @@ class DeviceApiClient:
         resp = self._client.put(f"/devices/{device_id}", json=payload)
         resp.raise_for_status()
 
+    def update_device(self, device: dict[str, Any]) -> None:
+        """
+        devices 레코드 전체를 갱신할 때 사용.
+
+        - ip_address, is_connected, config 등 여러 필드가 변경될 수 있다.
+        - 서버 측 DeviceCreate / DeviceUpdate 스키마와 동일한 필드 구성을 사용한다.
+        """
+        device_id = device.get("id")
+        if device_id is None:
+            return
+
+        payload: dict[str, Any] = {
+            "name": device.get("name"),
+            "type": device.get("type"),
+            "device_type": device.get("device_type"),
+            "connection_type": device.get("connection_type") or "ethernet",
+            "connection_detail": device.get("connection_detail"),
+            "control_method": device.get("control_method"),
+            "ip_address": device.get("ip_address"),
+            "port_info": device.get("port_info"),
+            "is_connected": device.get("is_connected", False),
+            "sensor_guids": device.get("sensor_guids"),
+            "device_guid": device.get("device_guid"),
+            "config": device.get("config"),
+            "is_active": device.get("is_active", True),
+        }
+
+        resp = self._client.put(f"/devices/{device_id}", json=payload)
+        resp.raise_for_status()
+
+    def update_device_ip_by_guid(self, device_guid: str, ip: str) -> dict[str, Any]:
+        """
+        device_guid 기준으로 해당 devices 행의 ip_address 만 갱신.
+        """
+        resp = self._client.put(
+            f"/devices/by-guid/{device_guid}/ip",
+            json={"ip_address": ip},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def close(self) -> None:
         self._client.close()
 

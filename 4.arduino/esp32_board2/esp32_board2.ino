@@ -5,15 +5,15 @@
 const char* ssid     = "addinedu_201class_2-2.4G";
 const char* password = "201class2!";
 
+const char* serverIP = "192.168.0.149"; // 3.device_client PC IP
+const uint16_t serverPort = 8080;       // UnifiedPacket TCP 포트
 
-const char* serverIP = "192.168.0.149"; // The Python server IP
-const uint16_t serverPort = 8080;     // The Control Server Port
-
-// --- Packet Definitions ---
-#define TYPE_IR_EVENT    0
-#define TYPE_DEVICE_LIST 4
-#define TYPE_PING        0xFE
-#define TYPE_PONG        0xFD
+// --- Packet Definitions (UnifiedPacket) ---
+#define TYPE_IR_EVENT      0
+#define TYPE_DEVICE_LIST   4
+#define TYPE_PING          0xFE
+#define TYPE_PONG          0xFD
+#define TYPE_DEV_REGISTER  6   // 장비 등록 패킷 (device_guid, device_name)
 
 #pragma pack(push, 1)
 struct UnifiedPacket {
@@ -53,6 +53,10 @@ const int ledPin4 = 14;
 // --- Logic Configuration ---
 const int DETECTED_STATE = LOW; 
 
+// 장비 고유 정보 (DB devices.device_guid / name 과 매칭)
+#define DEVICE_NAME "노상 주차면 센서 컨트롤러"
+#define DEVICE_GUID "DEV-STREET-1"
+
 // State Tracking
 int lastState1 = -1;
 int lastState2 = -1;
@@ -70,6 +74,19 @@ void sendDeviceList() {
     client.write((uint8_t*)&txPkt, sizeof(UnifiedPacket));
     delay(20);
     Serial.println("Device list sent to server.");
+}
+
+// 장비 등록 패킷 전송: DEVICE_GUID / DEVICE_NAME / 현재 IP
+void sendDeviceRegister() {
+    if (!client.connected()) return;
+    memset(&txPkt, 0, sizeof(txPkt));
+    txPkt.type = TYPE_DEV_REGISTER;
+    // payload[0..15] : device_guid (최대 16바이트)
+    strncpy((char*)&txPkt.payload[0], DEVICE_GUID, 16);
+    // payload[16..31] : device_name (최대 16바이트, 잘릴 수 있음)
+    strncpy((char*)&txPkt.payload[16], DEVICE_NAME, 16);
+    client.write((uint8_t*)&txPkt, sizeof(UnifiedPacket));
+    Serial.printf("Sent device register: guid=%s name=%s\n", DEVICE_GUID, DEVICE_NAME);
 }
 
 void sendParkingEvent(uint8_t spotNum, const char* srcName, bool isOccupied) {
@@ -159,6 +176,8 @@ void loop() {
           
           if (client.connect(serverIP, serverPort)) {
               Serial.println("Connected to Server!");
+              // 장비 등록 정보 전송 (device_guid, device_name)
+              sendDeviceRegister();
               // Force full status update upon connection
               lastState1 = -1; lastState2 = -1; lastState3 = -1; lastState4 = -1;
           }
