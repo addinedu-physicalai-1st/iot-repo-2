@@ -197,7 +197,7 @@ VALUES
   'ethernet',
   'tcp',
   'socket',
-  '192.168.25.52',   -- 실제 esp32_board2 고정 IP
+  '192.168.0.49',   -- 실제 esp32_board2 고정 IP
   '8080',
   1,
   0,
