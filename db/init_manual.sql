@@ -95,11 +95,13 @@ CREATE TABLE parking_slots (
   level              VARCHAR(20)  NULL,          -- street, tower 등
   is_occupied        TINYINT(1)   NOT NULL DEFAULT 0,
   sensor_connected   TINYINT(1)   NOT NULL DEFAULT 0,
+  sensor_guid        VARCHAR(32)  NULL,          -- 연결된 센서 GUID (sensors.guid 와 매핑용)
   last_vehicle_plate VARCHAR(20)  NULL,
   created_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_parking_slots_id (id),
-  KEY idx_parking_slots_name (name)
+  KEY idx_parking_slots_name (name),
+  KEY idx_parking_slots_sensor_guid (sensor_guid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 이벤트 로그 테이블
@@ -136,15 +138,15 @@ INSERT INTO devices (
   updated_at
 )
 VALUES
-  -- 입구 차단기 컨트롤러: IR(입구/출구) + RFID + 게이트 서보 센서 포함
+  -- 입출구 차단기 컨트롤러: IR(입구) + RFID + 게이트 서보 센서 포함
   (
-    '입차 차단기 컨트롤러_1',
+    '입출구 차단기 컨트롤러_1',
     'gate_controller',
     'CLIENT',
     'ethernet',
     'tcp',
     'socket',
-    '192.168.25.51',
+    '192.168.25.51', -- 입출구 차단기 컨트롤러 IP (esp32_board1_1)
     '8080',
     1,
     0,
@@ -153,6 +155,24 @@ VALUES
     NOW(),
     NOW()
   ),
+  -- 입출구 차단기 컨트롤러: IR(출구) + LED 제어
+  (
+    '입출구 차단기 컨트롤러_2',
+    'gate_controller',
+    'CLIENT',
+    'ethernet',
+    'tcp',
+    'socket',
+    '192.168.25.52', -- 입출구 차단기 컨트롤러 IP (esp32_board1_2)
+    '8080',
+    1,
+    0,
+    'ESP32-S2-EXIT01,ESP32-LED-01',
+    '{"socket_port":8080}',
+    NOW(),
+    NOW()
+  ),
+
     -- LPR 카메라 서버 (ESP32-CAM + PC 서버 연동)
   (
     'LPR 카메라 서버',
@@ -170,6 +190,21 @@ VALUES
     NOW(),
     NOW()
   ),
+   (
+  '노상 주차면 센서 컨트롤러',
+  'street_parking_controller',
+  'CLIENT',
+  'ethernet',
+  'tcp',
+  'socket',
+  '192.168.25.52',   -- 실제 esp32_board2 고정 IP
+  '8080',
+  1,
+  0,
+  'ESP32-IR-PARKINGLOT01,ESP32-IR-PARKINGLOT02,ESP32-IR-PARKINGLOT03,ESP32-IR-PARKINGLOT04',
+  '{"socket_port":8080}',
+  NOW(), NOW()
+),
   -- 주차타워 컨트롤러: 주차타워 Board No.3 등과 연동 예정
   (
     '주차타워 컨트롤러',
@@ -211,18 +246,18 @@ ON DUPLICATE KEY UPDATE
   is_active = VALUES(is_active),
   updated_at = NOW();
 
-INSERT INTO parking_slots (name, level, is_occupied, sensor_connected, last_vehicle_plate, created_at, updated_at)
+INSERT INTO parking_slots (name, level, is_occupied, sensor_connected, sensor_guid, last_vehicle_plate, created_at, updated_at)
 VALUES
-  ('S1', 'street', 0, 0, NULL, NOW(), NOW()),
-  ('S2', 'street', 0, 0, NULL, NOW(), NOW()),
-  ('S3', 'street', 0, 0, NULL, NOW(), NOW()),
-  ('S4', 'street', 0, 0, NULL, NOW(), NOW()),
-  ('T1', 'tower',  0, 0, NULL, NOW(), NOW()),
-  ('T2', 'tower',  0, 0, NULL, NOW(), NOW()),
-  ('T3', 'tower',  0, 0, NULL, NOW(), NOW()),
-  ('T4', 'tower',  0, 0, NULL, NOW(), NOW()),
-  ('T5', 'tower',  0, 0, NULL, NOW(), NOW()),
-  ('T6', 'tower',  0, 0, NULL, NOW(), NOW())
+  ('S1', 'street', 0, 0, 'ESP32-IR-PARKINGLOT01', NULL, NOW(), NOW()),
+  ('S2', 'street', 0, 0, 'ESP32-IR-PARKINGLOT02', NULL, NOW(), NOW()),
+  ('S3', 'street', 0, 0, 'ESP32-IR-PARKINGLOT03', NULL, NOW(), NOW()),
+  ('S4', 'street', 0, 0, 'ESP32-IR-PARKINGLOT04', NULL, NOW(), NOW()),
+  ('T1', 'tower',  0, 0, NULL, NULL, NOW(), NOW()),
+  ('T2', 'tower',  0, 0, NULL, NULL, NOW(), NOW()),
+  ('T3', 'tower',  0, 0, NULL, NULL, NOW(), NOW()),
+  ('T4', 'tower',  0, 0, NULL, NULL, NOW(), NOW()),
+  ('T5', 'tower',  0, 0, NULL, NULL, NOW(), NOW()),
+  ('T6', 'tower',  0, 0, NULL, NULL, NOW(), NOW())
 ON DUPLICATE KEY UPDATE updated_at = NOW();
 
 -- 입주민 샘플 데이터
@@ -265,10 +300,23 @@ VALUES
   ('ESP32-S1-ENTRY01','EntryVehDetect', 'ENTRY_IR',   1, NOW(), 'admin'),
   ('ESP32-S2-EXIT01', 'ExitVehDetect',  'EXIT_IR',    1, NOW(), 'admin'),
 
-  -- ESP32 보드1: RFID 리더기, 게이트 서보모터
+  -- ESP32 보드1: RFID 리더기, 게이트 서보모터, LED 제어
   ('ESP32-RFID-01',   'RFIDReader',     'RFID',       1, NOW(), 'admin'),
-  ('ESP32-GATE-01',   'GateServo',      'GATE_SERVO', 1, NOW(), 'admin')
+  ('ESP32-GATE-01',   'GateServo',      'GATE_SERVO', 1, NOW(), 'admin'),
+  ('ESP32-LED-01',   'LEDControl',      'LED_CONTROL', 1, NOW(), 'admin'),
+
+  -- ESP32 보드1: 주차면 제어
+  ('ESP32-IR-PARKINGLOT01', 'ParkingLotDetect',  'PARKING_IR',    1, NOW(), 'admin'),
+  ('ESP32-IR-PARKINGLOT02', 'ParkingLotDetect',  'PARKING_IR',    1, NOW(), 'admin'),
+  ('ESP32-IR-PARKINGLOT03', 'ParkingLotDetect',  'PARKING_IR',    1, NOW(), 'admin'),
+  ('ESP32-IR-PARKINGLOT04', 'ParkingLotDetect',  'PARKING_IR',    1, NOW(), 'admin')
+
 ON DUPLICATE KEY UPDATE
   name = VALUES(name),
   sensor_type = VALUES(sensor_type),
   is_active = VALUES(is_active);
+
+
+
+
+
