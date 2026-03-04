@@ -74,6 +74,7 @@ class Esp32GateServer(threading.Thread):
         self._device_list_buf: Dict[int, Dict[str, str]] = {}
         self._client: Optional[socket.socket] = None
         self._stop_flag = threading.Event()
+        self._current_ip: Optional[str] = None
 
     # ───────── 외부 호출용 API (명령 전송) ─────────
     def send_open_gate(self) -> None:
@@ -123,10 +124,12 @@ class Esp32GateServer(threading.Thread):
 
                 conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 self._client = conn
+                self._current_ip = addr[0]
                 self._on_log(f"[GATE] ESP32 보드 연결됨 ({addr[0]}:{addr[1]})")
                 self._on_state_change(True)
                 self._handle_client(conn, addr)
                 self._client = None
+                self._current_ip = None
         finally:
             try:
                 server.close()
@@ -213,6 +216,7 @@ class Esp32GateServer(threading.Thread):
             except Exception:
                 pass
             self._device_list_buf.clear()
+            # 연결 종료 시점의 IP를 사용해 상태 변경 알림
             self._on_log(f"[GATE] ESP32 보드 연결 종료 ({addr[0]}:{addr[1]})")
             self._on_state_change(False)
 

@@ -48,6 +48,24 @@ class TransmissionManager:
                 devices=devices,
             )
 
+    def set_gate_connected_by_ip(self, ip: str, connected: bool) -> None:
+        """
+        gate_controller 타입 중 특정 IP 에 해당하는 장비만 is_connected 업데이트.
+        """
+        devices: List[Dict[str, Any]] = self._api.list_devices()
+        changed = False
+        for d in devices:
+            if (d.get("type") or "").lower() == "gate_controller" and (d.get("ip_address") or "") == ip:
+                if bool(d.get("is_connected")) != connected:
+                    self._api.update_device_is_connected(d, connected)
+                    d["is_connected"] = connected
+                    changed = True
+        if changed:
+            self._info.update_from_server(
+                health=self._info.server_health,
+                devices=devices,
+            )
+
     def set_street_parking_connected(self, connected: bool) -> None:
         """
         street_parking_controller 타입(esp32_board2) 장비의 is_connected 플래그를
@@ -57,6 +75,24 @@ class TransmissionManager:
         changed = False
         for d in devices:
             if (d.get("type") or "").lower() == "street_parking_controller":
+                if bool(d.get("is_connected")) != connected:
+                    self._api.update_device_is_connected(d, connected)
+                    d["is_connected"] = connected
+                    changed = True
+        if changed:
+            self._info.update_from_server(
+                health=self._info.server_health,
+                devices=devices,
+            )
+
+    def set_street_parking_connected_by_ip(self, ip: str, connected: bool) -> None:
+        """
+        street_parking_controller 타입(esp32_board2) 중 특정 IP 장비만 업데이트.
+        """
+        devices: List[Dict[str, Any]] = self._api.list_devices()
+        changed = False
+        for d in devices:
+            if (d.get("type") or "").lower() == "street_parking_controller" and (d.get("ip_address") or "") == ip:
                 if bool(d.get("is_connected")) != connected:
                     self._api.update_device_is_connected(d, connected)
                     d["is_connected"] = connected
