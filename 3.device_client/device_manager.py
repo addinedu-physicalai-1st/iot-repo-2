@@ -40,6 +40,7 @@ class DeviceManager:
                 on_device_list=self._set_gate_devices,
                 on_state_change=self._on_gate_state_change,
                 on_register=self._on_device_register,
+                on_parking_event=self._on_parking_event,
             )
             self._gate_server.start()
 
@@ -113,6 +114,40 @@ class DeviceManager:
         except Exception as exc:
             self._append_gate_log(
                 f"[REG] DB ip_address 갱신 실패 guid={device_guid} ({exc})"
+            )
+
+    # ───────── 노상 주차면 이벤트 처리 (parking_slots 동기화) ─────────
+    def _on_parking_event(self, spot_name: str, is_occupied: bool) -> None:
+        """
+        ESP32 보드2(노상 주차면 센서 컨트롤러)에서 SPOT_1~4 이벤트가 올 때 호출된다.
+
+        - 내부 상태(self._parking_state)에 기록
+        - TransmissionManager 를 통해 /parking/slots API 호출 → DB parking_slots 동기화
+        """
+        self._parking_state[spot_name] = is_occupied
+        state_txt = "OCCUPIED" if is_occupied else "EMPTY"
+        self._append_gate_log(f"[PARKING] {spot_name} -> {state_txt}")
+
+        # SPOT_1~4 → S1~S4 로 매핑
+        mapping = {
+            "SPOT_1": "S1",
+            "SPOT_2": "S2",
+            "SPOT_3": "S3",
+            "SPOT_4": "S4",
+        }
+        slot_name = mapping.get(spot_name)
+        if not slot_name:
+            return
+
+        try:
+            # 번호판 정보는 현재 없으므로 plate=None
+            self._tx.set_slot_occupied(slot_name, is_occupied, plate=None)
+            self._append_gate_log(
+                f"[PARKING] DB 슬롯 갱신 완료 slot={slot_name} occupied={is_occupied}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._append_gate_log(
+                f"[PARKING] DB 슬롯 갱신 실패 slot={slot_name} ({exc})"
             )
 
     def get_gate_logs(self) -> list[str]:
