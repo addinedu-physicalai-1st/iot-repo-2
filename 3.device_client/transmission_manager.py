@@ -142,6 +142,23 @@ class TransmissionManager:
             devices=devices_after,
         )
 
+    # ───────── 주차면 점유 상태 업데이트 (parking_slots 동기화) ─────────
+    def set_slot_occupied(
+        self,
+        slot_name: str,
+        occupied: bool,
+        plate: str | None = None,
+    ) -> None:
+        """
+        parking_slots 테이블의 특정 슬롯(S1~S4, T1~T6 등)에 대해
+        is_occupied / sensor_connected 상태를 업데이트한다.
+
+        - esp32_board2 의 SPOT_1~4 이벤트를 DeviceManager 가 받아서 호출.
+        - 2.client 는 /parking/dashboard 를 통해 이 정보를 읽어와
+          주차 대수/빈자리/색상(UI)을 자동으로 갱신한다.
+        """
+        self._api.set_slot_occupied(slot_name, occupied, plate)
+
     # ───────── 종료 처리 ─────────
     def close(self) -> None:
         self._api.close()

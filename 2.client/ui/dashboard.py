@@ -268,7 +268,8 @@ class DashboardWindow(QMainWindow):
         main_layout.addLayout(btn_layout)
 
         self.timer = QTimer(self)
-        self.timer.setInterval(5000)  # 5초마다 자동 갱신
+        # 주차 감지 반응성을 높이기 위해 1초 주기로 단축
+        self.timer.setInterval(1000)
         self.timer.timeout.connect(self.refresh_all)
         self.timer.start()
 

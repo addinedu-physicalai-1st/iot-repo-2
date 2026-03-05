@@ -65,6 +65,7 @@ class Esp32GateServer(threading.Thread):
         on_device_list: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
         on_state_change: Optional[Callable[[bool], None]] = None,
         on_register: Optional[Callable[[str, str, str], None]] = None,
+        on_parking_event: Optional[Callable[[str, bool], None]] = None,
     ) -> None:
         super().__init__(daemon=True)
         self._host = host
@@ -74,6 +75,8 @@ class Esp32GateServer(threading.Thread):
         self._on_state_change = on_state_change or (lambda connected: None)
         # device_guid, device_name, ip 를 전달하는 콜백
         self._on_register = on_register or (lambda guid, name, ip: None)
+        # 노상 주차면 이벤트(SPOT_1~4 OCCUPIED/EMPTY)를 서버/DB 동기화용으로 전달
+        self._on_parking_event = on_parking_event or (lambda spot, occ: None)
 
         self._device_list_buf: Dict[int, Dict[str, str]] = {}
         self._client: Optional[socket.socket] = None
@@ -192,6 +195,12 @@ class Esp32GateServer(threading.Thread):
                         name = EV_NAMES.get(ev, f"EV_{ev}")
                         line = f"[EVENT] {name} | {src}" + (f" | {ext}" if ext else "")
                     self._on_log(line)
+
+                    # 노상 주차면 센서 이벤트인 경우(SPOT_1~4, OCCUPIED/EMPTY),
+                    # 상위(DeviceManager)로 콜백을 주어 parking_slots 와 동기화한다.
+                    if src.startswith("SPOT_") and ext in ("OCCUPIED", "EMPTY"):
+                        is_occupied = ext == "OCCUPIED"
+                        self._on_parking_event(src, is_occupied)
                     continue
 
                 # 3. RFID
