@@ -39,7 +39,10 @@ class Esp32UdpReceiver:
 
     def _loop(self) -> None:
         assert self._sock is not None
-        # frames[f_no] = {"chunks": {p_no: bytes}, "target_checksum": int}
+        # frames[f_no] = {"chunks": {p_no: bytes}, "target_checksum": Optional[int]}
+        # 헤더 포맷은 두 가지를 모두 지원한다.
+        # 1) 구버전(esp32_cam_udp 등): [f_no, p_no, checksum] + data
+        # 2) 555 버전(esp32_lpr_enter_555 등): [f_no, p_no, is_last, checksum] + data
         frames: dict[int, dict[str, object]] = {}
         last_frame_no = -1
 
@@ -51,8 +54,20 @@ class Esp32UdpReceiver:
 
                 f_no = data[0]
                 p_no = data[1]
-                received_checksum = data[2]
-                chunk = data[3:]
+
+                # 헤더 포맷 자동 감지
+                header_type = "legacy"  # 또는 "555"
+                is_last = 0
+                if len(data) >= 5 and data[2] in (0, 1):
+                    # 555 포맷: [f_no, p_no, is_last, checksum] + data
+                    header_type = "555"
+                    is_last = data[2]
+                    received_checksum = data[3]
+                    chunk = data[4:]
+                else:
+                    # 구버전 포맷: [f_no, p_no, checksum] + data
+                    received_checksum = data[2]
+                    chunk = data[3:]
 
                 if f_no < last_frame_no and (last_frame_no - f_no) < 200:
                     continue
@@ -60,16 +75,21 @@ class Esp32UdpReceiver:
                 if f_no not in frames:
                     if len(frames) > 3:
                         del frames[min(frames.keys())]
-                    frames[f_no] = {"chunks": {}, "target_checksum": 0}
+                    frames[f_no] = {"chunks": {}, "target_checksum": None}
 
                 entry = frames[f_no]
                 chunks: dict[int, bytes] = entry["chunks"]  # type: ignore[assignment]
                 chunks[p_no] = chunk
 
-                # 마지막 패킷(JPEG 마커 포함)인 경우 체크섬 저장 후 프레임 조립
-                if b"\xff\xd9" in chunk:
+                # 555 포맷: 마지막 패킷(is_last == 1)에서 checksum 저장
+                if header_type == "555" and is_last == 1:
+                    entry["target_checksum"] = received_checksum
+                # 구버전 포맷: JPEG EOI(0xFFD9)를 포함한 패킷에서 checksum 저장
+                elif header_type == "legacy" and b"\xff\xd9" in chunk:
                     entry["target_checksum"] = received_checksum
 
+                target = entry.get("target_checksum")  # type: ignore[assignment]
+                if target is not None:
                     indices = sorted(chunks.keys())
                     # 청크가 0부터 연속적으로 모두 도착했는지 확인
                     if indices and indices[0] == 0 and len(indices) == indices[-1] + 1:
@@ -77,10 +97,10 @@ class Esp32UdpReceiver:
 
                         # 체크섬 검증 (sum(full_data) % 256)
                         calculated_checksum = sum(full_data) % 256
-                        if calculated_checksum != entry["target_checksum"]:
+                        if calculated_checksum != target:
                             print(
                                 f"[ESP32] Frame {f_no} checksum mismatch "
-                                f"calc={calculated_checksum}, recv={received_checksum}"
+                                f"calc={calculated_checksum}, recv={target}"
                             )
                             frames.pop(f_no, None)
                             continue

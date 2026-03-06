@@ -178,21 +178,21 @@ VALUES
     NOW()
   ),
 
-    -- LPR 카메라 서버 (ESP32-CAM + PC 서버 연동)
+  -- LPR 카메라 서버 (ESP32-CAM + PC 서버 연동 (입구카메라))
   (
-    'LPR 카메라 서버',
-    'lpr_camera_server',
-    'SERVER',
+    '입구 LPR 카메라',
+    'lpr_camera',
+    'CLIENT',
     'ethernet',
     'udp,tcp',
     'restapi',
     '192.168.0.30',
-    '80', -- 주 통신 포트 (REST)
+    '7080', -- 주 통신 포트 (REST)
     1,
     0,
     'ESP32-CAM-01',
     'DEV-LPR-1',
-    '{"rest_port":80,"udp_port":7072}',
+    '{"rest_port":7080,"udp_port":7070}',
     NOW(),
     NOW()
   ),
