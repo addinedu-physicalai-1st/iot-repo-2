@@ -80,7 +80,7 @@ void setup() {
   }
   Serial.print("\nWiFi Connected. IP: ");
   Serial.println(WiFi.localIP());
-  Serial.println("ESP32 Cam UDP Streaming Start!");
+  Serial.println("ESP32 Cam UDP Streaming Ready!");
 }
 
 // ===== 4. UDP 전송 (체크섬 포함, 3.device_client/esp32_receiver.py 와 매칭) =====

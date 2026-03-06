@@ -1,0 +1,444 @@
+// ESP32-CAM 클라이언트 555 — REST API 양방향 제어 + UDP 영상 전송(별도 스레드)
+// REST: POST /api/device/register, GET /api/device/command (폴링) → 서버 명령 수신
+// UDP: 영상 전송은 FreeRTOS 태스크에서 전담 (loop와 분리)
+
+#include "esp_camera.h"
+#include <WiFi.h>
+#include <WiFiUdp.h>
+#include <HTTPClient.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <WebServer.h>
+
+#if 0
+const char* ssid     = "addinedu_201class_2-2.4G";
+const char* password = "201class2!";
+
+char serverHostBuf[64] = "192.168.0.149"; //Tony Home
+#else // Debug Home Mode
+const char* ssid     = "iptime_WiFiCE6D";
+const char* password = "!Tony6251@";
+
+char serverHostBuf[64] = "192.168.25.35"; //Tony Home
+#endif
+// 서버 주소: 초기값 사용, GET /api/device/config 폴링으로 파이썬에서 수정 가능
+// REST 7080, UDP 7070
+uint16_t restPortNum = 7080;
+uint16_t udpPortNum  = 7070;
+
+#define DEVICE_GUID "ESP32-CAM-01"
+#define DEVICE_NAME "CamStream"
+
+WiFiUDP udp;
+volatile bool camStreaming = false;
+const unsigned long REST_CONFIG_POLL_INTERVAL_MS = 10000;
+const unsigned long REST_DEVICES_POLL_INTERVAL_MS = 10000;
+// 서버가 이 장비의 /api/devices/alive 를 마지막으로 호출한 시각
+const unsigned long ALIVE_TIMEOUT_MS = 60000;   // 1분
+unsigned long lastConfigPoll = 0;
+unsigned long lastDevicesPoll = 0;
+unsigned long lastAliveHit = 0;
+const unsigned long FRAME_INTERVAL_MS = 100;
+unsigned long lastFrameTime = 0;
+uint8_t frameNo = 0;
+
+#define PWDN_GPIO_NUM     32
+#define RESET_GPIO_NUM    -1
+#define XCLK_GPIO_NUM      0
+#define SIOD_GPIO_NUM     26
+#define SIOC_GPIO_NUM     27
+#define Y9_GPIO_NUM       35
+#define Y8_GPIO_NUM       34
+#define Y7_GPIO_NUM       39
+#define Y6_GPIO_NUM       36
+#define Y5_GPIO_NUM       21
+#define Y4_GPIO_NUM       19
+#define Y3_GPIO_NUM       18
+#define Y2_GPIO_NUM        5
+#define VSYNC_GPIO_NUM    25
+#define HREF_GPIO_NUM     23
+#define PCLK_GPIO_NUM     22
+#define FLASH_LED_PIN     4
+
+// 2. 웹 서버 객체 생성 (기본 HTTP 포트 80)
+WebServer server(80);
+
+// 3. /api/devices/info 응답 핸들러
+void handleDeviceInfo() 
+{
+    String json = "{";
+    json += "\"guid\":\"" + String(DEVICE_GUID) + "\",";
+    json += "\"name\":\"" + String(DEVICE_NAME) + "\"";
+    json += "}";
+    server.send(200, "application/json", json);
+    Serial.println("[Server] Responded to /api/devices/info");
+}
+
+// 4. /api/devices/alive 응답 핸들러
+void handleAlive() 
+{
+    server.send(200, "text/plain", "OK");
+    lastAliveHit = millis();   // 서버가 주기적으로 호출하고 있음을 기록
+    Serial.println("[Server] Responded to /api/devices/alive");
+}
+
+// REST: 장비 등록 (POST JSON) — 초기 셋업 끝난 후 서버에 IP 등 보고
+void restRegister() {
+    HTTPClient http;
+    String url = "http://";
+    url += serverHostBuf;
+    url += ":";
+    url += String(restPortNum);
+    url += "/api/device/register";
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    String ipStr = WiFi.localIP().toString();
+    String body = "{\"guid\":\"";
+    body += DEVICE_GUID;
+    body += "\",\"name\":\"";
+    body += DEVICE_NAME;
+    body += "\",\"ip\":\"";
+    body += ipStr;
+    body += "\"}";
+    int code = http.POST(body);
+    http.end();
+    if (code == 200)
+        Serial.println("[555] REST register OK (ip=" + ipStr + ").");
+    else
+        Serial.printf("[555] REST register %d\n", code);
+}
+
+// REST: 서버에서 장비에 내려보낼 설정 수신 (GET) — 파이썬 에디터에서 수정한 값 반영
+void restPollConfig() {
+    HTTPClient http;
+    String url = "http://";
+    url += serverHostBuf;
+    url += ":";
+    url += String(restPortNum);
+    url += "/api/device/config";
+    http.begin(url);
+    int code = http.GET();
+    String payload;
+    if (code == 200)
+        payload = http.getString();
+    http.end();
+    if (code != 200 || payload.length() == 0) return;
+    int hostStart = payload.indexOf("\"server_host\":\"");
+    if (hostStart >= 0) {
+        hostStart += 15;
+        int hostEnd = payload.indexOf("\"", hostStart);
+        if (hostEnd > hostStart && hostEnd - hostStart < (int)sizeof(serverHostBuf) - 1) {
+            payload.substring(hostStart, hostEnd).toCharArray(serverHostBuf, sizeof(serverHostBuf));
+        }
+    }
+    int rpStart = payload.indexOf("\"rest_port\":");
+    if (rpStart >= 0) {
+        restPortNum = (uint16_t)payload.substring(rpStart + 12).toInt();
+        if (restPortNum == 0) restPortNum = 7080;
+    }
+    int upStart = payload.indexOf("\"udp_port\":");
+    if (upStart >= 0) {
+        udpPortNum = (uint16_t)payload.substring(upStart + 11).toInt();
+        if (udpPortNum == 0) udpPortNum = 7070;
+    }
+    Serial.printf("[555] config → host=%s rest=%u udp=%u\n", serverHostBuf, restPortNum, udpPortNum);
+}
+
+// 공통 로직: JSON payload에서 command를 읽어 장비 상태/UDP 설정 변경
+void applyCommandFromPayload(const String& payload) {
+    // cam_start / cam_stop
+    if (payload.indexOf("\"command\":\"cam_start\"") >= 0 || payload.indexOf("cam_start") >= 0) {
+        camStreaming = true;
+        Serial.println("REST: cam_start → UDP stream ON.");
+    } else if (payload.indexOf("\"command\":\"cam_stop\"") >= 0 || payload.indexOf("cam_stop") >= 0) {
+        camStreaming = false;
+        Serial.println("REST: cam_stop → UDP stream OFF.");
+    }
+    // flash 제어
+    else if (payload.indexOf("\"command\":\"flash_on\"") >= 0 || payload.indexOf("flash_on") >= 0) {
+        digitalWrite(FLASH_LED_PIN, HIGH);
+        Serial.println("REST: flash_on.");
+    } else if (payload.indexOf("\"command\":\"flash_off\"") >= 0 || payload.indexOf("flash_off") >= 0) {
+        digitalWrite(FLASH_LED_PIN, LOW);
+        Serial.println("REST: flash_off.");
+    } else if (payload.indexOf("\"command\":\"flash_blink\"") >= 0 || payload.indexOf("flash_blink") >= 0) {
+        for (int i = 0; i < 3; i++) {
+            digitalWrite(FLASH_LED_PIN, HIGH);
+            delay(200);
+            digitalWrite(FLASH_LED_PIN, LOW);
+            delay(200);
+        }
+        Serial.println("REST: flash_blink (3).");
+    }
+    // UDP 목적지 설정: {"command":"set_udp","ip":"x.x.x.x","port":7072}
+    else if (payload.indexOf("\"command\":\"set_udp\"") >= 0 || payload.indexOf("set_udp") >= 0) {
+        String ipStr;
+        uint16_t newPort = udpPortNum;
+
+        int ipStart = payload.indexOf("\"ip\":\"");
+        if (ipStart >= 0) {
+            ipStart += 6; // skip "ip":" 
+            int ipEnd = payload.indexOf("\"", ipStart);
+            if (ipEnd > ipStart) {
+                ipStr = payload.substring(ipStart, ipEnd);
+            }
+        }
+
+        int portStart = payload.indexOf("\"port\":");
+        if (portStart >= 0) {
+            newPort = (uint16_t)payload.substring(portStart + 7).toInt();
+            if (newPort == 0) {
+                newPort = udpPortNum;
+            }
+        }
+
+        if (ipStr.length() > 0) {
+            ipStr.toCharArray(serverHostBuf, sizeof(serverHostBuf));
+        }
+        udpPortNum = newPort;
+
+        Serial.printf("REST: set_udp → host=%s port=%u\n", serverHostBuf, udpPortNum);
+    }
+}
+
+// REST: 명령 폴링 (GET) → 응답 JSON에서 command 파싱
+void restPollCommand() {
+    HTTPClient http;
+    String url = "http://";
+    url += serverHostBuf;
+    url += ":";
+    url += String(restPortNum);
+    url += "/api/device/command?guid=";
+    url += String(DEVICE_GUID);
+    http.begin(url);
+    int code = http.GET();
+    String payload;
+    if (code == 200)
+        payload = http.getString();
+    http.end();
+    if (code != 200 || payload.length() == 0)
+        return;
+    applyCommandFromPayload(payload);
+}
+
+// 포트 80 REST: /api/device/command → 외부에서 직접 명령 전송
+void handleDeviceCommand() {
+    String payload;
+
+    // 1) POST 본문(JSON) 우선 사용
+    if (server.method() == HTTP_POST) {
+        payload = server.arg("plain");
+    }
+
+    // 2) 쿼리스트링 또는 폼 데이터로 전달된 command/ip/port 지원
+    if (payload.length() == 0 && server.hasArg("command")) {
+        String json = "{\"command\":\"" + server.arg("command") + "\"";
+        if (server.hasArg("ip")) {
+            json += ",\"ip\":\"" + server.arg("ip") + "\"";
+        }
+        if (server.hasArg("port")) {
+            json += ",\"port\":" + server.arg("port");
+        }
+        json += "}";
+        payload = json;
+    }
+
+    if (payload.length() == 0) {
+        server.send(400, "application/json", "{\"error\":\"no command\"}");
+        return;
+    }
+
+    applyCommandFromPayload(payload);
+    server.send(200, "application/json", "{\"status\":\"ok\"}");
+}
+
+// REST: /api/devices 호출 → 서버가 알고 있는 장비 목록(guid, name 등)을 확인용으로 출력
+void restPollDevices() {
+    HTTPClient http;
+    String url = "http://";
+    url += serverHostBuf;
+    url += ":";
+    url += String(restPortNum);
+    url += "/api/devices";
+    http.begin(url);
+    int code = http.GET();
+    String payload;
+    if (code == 200) {
+        payload = http.getString();
+    }
+    http.end();
+
+    if (code != 200 || payload.length() == 0) {
+        return;
+    }
+
+    // 아주 단순하게 JSON 문자열에서 "guid" / "name" 쌍을 찾아서 시리얼에 출력
+    int pos = 0;
+    while (true) {
+        int gIdx = payload.indexOf("\"guid\"", pos);
+        if (gIdx < 0) break;
+        int gValStart = payload.indexOf("\"", gIdx + 6);
+        if (gValStart < 0) break;
+        gValStart += 1;
+        int gValEnd = payload.indexOf("\"", gValStart);
+        if (gValEnd < 0) break;
+        String guid = payload.substring(gValStart, gValEnd);
+
+        int nIdx = payload.indexOf("\"name\"", gValEnd);
+        if (nIdx < 0) {
+            pos = gValEnd;
+            continue;
+        }
+        int nValStart = payload.indexOf("\"", nIdx + 6);
+        if (nValStart < 0) break;
+        nValStart += 1;
+        int nValEnd = payload.indexOf("\"", nValStart);
+        if (nValEnd < 0) break;
+        String name = payload.substring(nValStart, nValEnd);
+
+        Serial.print("[555] /api/devices → guid=");
+        Serial.print(guid);
+        Serial.print(" name=");
+        Serial.println(name);
+
+        pos = nValEnd;
+    }
+}
+
+void sendImageUDP(uint8_t* imageData, size_t imageSize, uint8_t fno) {
+    size_t remainingSize = imageSize;
+    uint8_t packetNo = 0;
+    uint8_t checksum = 0;
+    for (size_t i = 0; i < imageSize; i++) checksum += imageData[i];
+    while (remainingSize > 0) {
+        size_t chunkSize = (remainingSize <= 1024) ? remainingSize : (size_t)1024;
+        bool isLastPacket = (remainingSize <= 1024);
+        udp.beginPacket(serverHostBuf, udpPortNum);
+        udp.write(fno);
+        udp.write(packetNo);
+        udp.write(isLastPacket ? (uint8_t)1 : (uint8_t)0);
+        udp.write(isLastPacket ? checksum : (uint8_t)0);
+        udp.write(imageData, chunkSize);
+        udp.endPacket();
+        imageData += chunkSize;
+        remainingSize -= chunkSize;
+        packetNo++;
+        delayMicroseconds(2500);
+    }
+    Serial.printf("[SEND555] f_no=%u pkts=%u size=%u\n", (unsigned)fno, (unsigned)packetNo, (unsigned)imageSize);
+}
+
+// UDP 영상 전송 전용 태스크 (별도 스레드)
+void udpStreamTask(void* pvParameters) {
+    for (;;) {
+        if (camStreaming && (millis() - lastFrameTime >= FRAME_INTERVAL_MS)) {
+            lastFrameTime = millis();
+            camera_fb_t* fb = esp_camera_fb_get();
+            if (fb) {
+                sendImageUDP(fb->buf, fb->len, frameNo);
+                esp_camera_fb_return(fb);
+                frameNo++;
+            }
+            vTaskDelay(1);
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+    }
+}
+
+void setup() 
+{
+    Serial.begin(115200);
+    Serial.println("\n--- ESP32-CAM client 555 (REST API + UDP task) ---");
+
+    camera_config_t config;
+    config.ledc_channel = LEDC_CHANNEL_0;
+    config.ledc_timer = LEDC_TIMER_0;
+    config.pin_d0 = Y2_GPIO_NUM;
+    config.pin_d1 = Y3_GPIO_NUM;
+    config.pin_d2 = Y4_GPIO_NUM;
+    config.pin_d3 = Y5_GPIO_NUM;
+    config.pin_d4 = Y6_GPIO_NUM;
+    config.pin_d5 = Y7_GPIO_NUM;
+    config.pin_d6 = Y8_GPIO_NUM;
+    config.pin_d7 = Y9_GPIO_NUM;
+    config.pin_xclk = XCLK_GPIO_NUM;
+    config.pin_pclk = PCLK_GPIO_NUM;
+    config.pin_vsync = VSYNC_GPIO_NUM;
+    config.pin_href = HREF_GPIO_NUM;
+    config.pin_sscb_sda = SIOD_GPIO_NUM;
+    config.pin_sscb_scl = SIOC_GPIO_NUM;
+    config.pin_pwdn = PWDN_GPIO_NUM;
+    config.pin_reset = RESET_GPIO_NUM;
+    config.xclk_freq_hz = 10000000;
+    config.pixel_format = PIXFORMAT_JPEG;
+    config.frame_size = FRAMESIZE_QVGA;
+    config.jpeg_quality = 10;
+    config.fb_count = 2;
+    config.grab_mode = CAMERA_GRAB_LATEST;
+
+    if (esp_camera_init(&config) != ESP_OK) {
+        Serial.println("Camera init failed.");
+        delay(1000);
+        ESP.restart();
+    }
+
+    pinMode(FLASH_LED_PIN, OUTPUT);
+    digitalWrite(FLASH_LED_PIN, LOW);
+
+    WiFi.begin(ssid, password);
+    WiFi.setSleep(false);
+    while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+    Serial.println("\nWiFi Connected.");
+
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP()); // 이 줄을 추가하면 IP가 찍힙니다.
+    lastAliveHit = millis(); // 부팅 직후 기준 시각 설정
+
+    // 5. 서버 경로(Route) 등록
+    server.on("/api/devices/info", HTTP_GET, handleDeviceInfo);
+    server.on("/api/devices/alive", HTTP_GET, handleAlive);
+    server.on("/api/device/command", HTTP_ANY, handleDeviceCommand);
+    
+    // 서버 시작
+    server.begin();
+    Serial.println("REST API Server started on port 80");
+
+    delay(1000);
+
+    restRegister(); //서버로 등록 요청
+    restPollConfig(); //서버에서 설정 수신
+    
+    xTaskCreate(udpStreamTask, "udp555", 8192, NULL, 1, NULL);
+    Serial.println("UDP stream task started.");
+    
+    Serial.println("Init setup : End");
+}
+
+void loop() {
+    
+    if (WiFi.status() != WL_CONNECTED) 
+    {
+        delay(5000);
+        return;
+    }
+
+    // 6. 클라이언트의 요청을 처리하기 위해 반드시 필요
+    server.handleClient();
+    
+    // 1분 동안 /api/devices/alive 요청이 오지 않았다면
+    // 서버와의 세션이 끊긴 것으로 보고 다시 등록 및 설정 수신
+    if (millis() - lastAliveHit >= ALIVE_TIMEOUT_MS) {
+        Serial.println("[ALIVE] 서버 alive 신호 없음 → re-register & re-config");
+        restRegister();
+        restPollConfig();
+        lastAliveHit = millis();
+    }
+    
+    if (millis() - lastConfigPoll >= REST_CONFIG_POLL_INTERVAL_MS) {
+        lastConfigPoll = millis();
+        restPollConfig();
+    }
+    
+    delay(10);
+}
