@@ -19,8 +19,21 @@ ESP32 카메라 ↔ 디바이스 PC UDP 프로토콜
 
 
 class Esp32UdpReceiver:
-    def __init__(self, on_frame: Optional[Callable[[int, np.ndarray], None]] = None) -> None:
+    def __init__(
+        self,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        on_frame: Optional[Callable[[int, np.ndarray], None]] = None,
+    ) -> None:
+        """
+        ESP32 UDP 수신기.
+
+        - host/port 를 지정하지 않으면 config.settings 의 udp_listen_host/udp_listen_port 를 사용한다.
+        - on_frame(f_no, img) 콜백으로 완성된 프레임을 전달한다.
+        """
         self.on_frame = on_frame
+        self._host = host or settings.udp_listen_host
+        self._port = port or settings.udp_listen_port
         self._sock: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -29,12 +42,12 @@ class Esp32UdpReceiver:
     def start(self) -> None:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
-        self._sock.bind((settings.udp_listen_host, settings.udp_listen_port))
+        self._sock.bind((self._host, self._port))
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         print(
-            f"[ESP32] UDP listening on {settings.udp_listen_host}:{settings.udp_listen_port}"
+            f"[ESP32] UDP listening on {self._host}:{self._port}"
         )
 
     def _loop(self) -> None:

@@ -36,7 +36,7 @@ class DeviceClientSettings:
         # DB/init_manual.sql 기준: rest_port=7080, udp_port=7070
         return int(os.getenv("UDP_LISTEN_PORT", "7070"))
 
-    # ───────── LPR 입구 카메라(esp32_lpr_enter) 설정 ─────────
+    # ───────── LPR 카메라 (입구/출구) 설정 ─────────
     @property
     def lpr_enter_rest_port(self) -> int:
         """
@@ -51,9 +51,24 @@ class DeviceClientSettings:
         """
         LPR 입구 카메라 UDP 영상 포트.
 
-        기본값은 LPR_CAMERA_SERVER_UDP_PORT, 없으면 7070.
+        기본값은 LPR_CAMERA_SERVER_UDP_PORT1, 없으면
+        LPR_CAMERA_SERVER_UDP_PORT (구버전 환경변수), 최종 7070.
         """
-        return int(os.getenv("LPR_CAMERA_SERVER_UDP_PORT", "7070"))
+        return int(
+            os.getenv(
+                "LPR_CAMERA_SERVER_UDP_PORT1",
+                os.getenv("LPR_CAMERA_SERVER_UDP_PORT", "7070"),
+            )
+        )
+
+    @property
+    def lpr_exit_udp_port(self) -> int:
+        """
+        LPR 출구 카메라 UDP 영상 포트.
+
+        기본값은 LPR_CAMERA_SERVER_UDP_PORT2, 없으면 7090.
+        """
+        return int(os.getenv("LPR_CAMERA_SERVER_UDP_PORT2", "7090"))
 
     # ESP32 보드 TCP 설정
     @property
