@@ -33,7 +33,8 @@ TYPE_CMD_OPEN = 2
 TYPE_CMD_CLOSE = 5
 TYPE_CMD_WRITE = 3
 TYPE_DEVICE_LIST = 4
-TYPE_DEV_REGISTER = 6  # 장비 등록 패킷 (device_guid, device_name)
+TYPE_DEV_REGISTER = 6
+TYPE_CMD_DISPLAY = 7  # New type for sending text to LCD
 
 EV_NAMES = {
     1: "ENTRY_DETECTED",
@@ -66,60 +67,137 @@ class Esp32GateServer(threading.Thread):
         on_state_change: Optional[Callable[[bool], None]] = None,
         on_register: Optional[Callable[[str, str, str], None]] = None,
         on_parking_event: Optional[Callable[[str, bool], None]] = None,
+        on_event: Optional[Callable[[int, str, str], None]] = None,
     ) -> None:
         super().__init__(daemon=True)
         self._host = host
         self._port = port
-        self._on_log = on_log or (lambda msg: None)
-        self._on_device_list = on_device_list or (lambda lst: None)
-        self._on_state_change = on_state_change or (lambda connected: None)
-        # device_guid, device_name, ip 를 전달하는 콜백
-        self._on_register = on_register or (lambda guid, name, ip: None)
-        # 노상 주차면 이벤트(SPOT_1~4 OCCUPIED/EMPTY)를 서버/DB 동기화용으로 전달
-        self._on_parking_event = on_parking_event or (lambda spot, occ: None)
+        self._on_log = on_log or (lambda msg, ip=None: None)
+        self._on_device_list = on_device_list or (lambda lst, ip=None: None)
+        self._on_state_change = on_state_change or (lambda connected, ip=None: None)
+        self._on_register = on_register or (lambda guid, name, ip=None: None)
+        self._on_parking_event = on_parking_event or (lambda spot, occ, ip=None: None)
+        self._on_event = on_event or (lambda ev, src, ext, ip=None: None)
+        
+        # 추가: 다중 리스너 지원
+        self._listeners: List[Dict[str, Any]] = []
+        print(f"[DEBUG] Esp32GateServer initialized with _on_event: {self._on_event}")
 
-        self._device_list_buf: Dict[int, Dict[str, str]] = {}
-        self._client: Optional[socket.socket] = None
+        self._device_list_bufs: Dict[str, Dict[int, Dict[str, str]]] = {} # IP -> buffer
+        self._clients: Dict[str, socket.socket] = {} # IP -> socket
+        self._client_types: Dict[str, str] = {}    # IP -> board_id
         self._stop_flag = threading.Event()
-        self._current_ip: Optional[str] = None
+
+    def add_listener(self, listener: Dict[str, Any]) -> None:
+        """
+        리스너 등록. listener 는 다음 콜백 중 일부를 가질 수 있음:
+        on_log(msg, ip), on_device_list(lst, ip), on_state_change(conn, ip),
+        on_register(guid, name, ip), on_parking_event(spot, occ, ip), on_event(ev, src, ext, ip)
+        """
+        self._listeners.append(listener)
+
+    def remove_listener(self, listener: Dict[str, Any]) -> None:
+        if listener in self._listeners:
+            self._listeners.remove(listener)
+
+    def _notify_listeners(self, callback_name: str, *args, **kwargs) -> None:
+        # 기존 단일 콜백 실행
+        cb = getattr(self, f"_{callback_name}", None)
+        if cb:
+            try: cb(*args, **kwargs)
+            except: pass
+            
+        # 다중 리스너 실행
+        for l in self._listeners:
+            f = l.get(callback_name)
+            if f:
+                try: f(*args, **kwargs)
+                except: pass
+
+    def _log(self, msg: str, ip: str | None = None) -> None:
+        self._notify_listeners("on_log", msg, ip=ip)
 
     # ───────── 외부 호출용 API (명령 전송) ─────────
-    def send_open_gate(self) -> None:
-        if not self._client:
-            return
-        try:
-            self._client.sendall(struct.pack(STRUCT_FORMAT, TYPE_CMD_OPEN, b"\x00" * 32))
-            self._on_log("[CMD] 게이트 열기 전송")
-        except OSError:
-            self._on_log("[CMD] 게이트 열기 전송 실패 (소켓 에러)")
+    def send_open_gate(self, target_guid: str | None = None) -> None:
+        """게이트 열기 명령 전송."""
+        payload = b"\x00" * 32
+        if target_guid:
+            self._send_targeted(target_guid, TYPE_CMD_OPEN, payload)
+        else:
+            self._broadcast(TYPE_CMD_OPEN, payload)
+        self._on_log("[CMD] 게이트 열기 명령 전송")
 
-    def send_close_gate(self) -> None:
-        if not self._client:
-            return
-        try:
-            self._client.sendall(struct.pack(STRUCT_FORMAT, TYPE_CMD_CLOSE, b"\x00" * 32))
-            self._on_log("[CMD] 게이트 닫기 전송")
-        except OSError:
-            self._on_log("[CMD] 게이트 닫기 전송 실패 (소켓 에러)")
+    def send_close_gate(self, target_guid: str | None = None) -> None:
+        """게이트 닫기 명령 전송."""
+        payload = b"\x00" * 32
+        if target_guid:
+            self._send_targeted(target_guid, TYPE_CMD_CLOSE, payload)
+        else:
+            self._broadcast(TYPE_CMD_CLOSE, payload)
+        self._on_log("[CMD] 게이트 닫기 명령 전송")
 
-    def send_write_siteid(self, site_id: str) -> None:
-        if not self._client:
-            return
-        # 첫 바이트는 예비(0), 이후 16바이트 SiteID, 나머지 패딩
+    def send_write_siteid(self, site_id: str, target_guid: str | None = None) -> None:
         payload = b"\x00" + site_id.encode().ljust(16, b"\x00")[:16] + b"\x00" * 15
-        try:
-            self._client.sendall(struct.pack(STRUCT_FORMAT, TYPE_CMD_WRITE, payload))
-            self._on_log(f"[CMD] 카드 SiteID 쓰기 명령 전송 (SiteID={site_id})")
-        except OSError:
-            self._on_log("[CMD] 카드 SiteID 쓰기 전송 실패 (소켓 에러)")
+        if target_guid:
+            self._send_targeted(target_guid, TYPE_CMD_WRITE, payload)
+        else:
+            self._broadcast(TYPE_CMD_WRITE, payload)
+
+    def _send_targeted(self, guid: str, typ: int, payload: bytes) -> None:
+        target_ip = next((ip for ip, g in self._client_types.items() if g == guid), None)
+        if target_ip and target_ip in self._clients:
+            try:
+                self._clients[target_ip].sendall(struct.pack(STRUCT_FORMAT, typ, payload))
+            except OSError:
+                pass
+        else:
+            # 타겟 없으면 전체 브로드캐스트
+            self._broadcast(typ, payload)
+
+    def send_lcd_text(self, line1: str, line2: str = "", target_guid: str | None = None) -> None:
+        """ESP32 보드로 텍스트 전달."""
+        payload = line1.encode().ljust(16, b"\x00")[:16] + line2.encode().ljust(16, b"\x00")[:16]
+        
+        target_ip = None
+        if target_guid:
+            # GUID 로 IP 찾기
+            target_ip = next((ip for ip, g in self._client_types.items() if g == target_guid), None)
+        
+        if not target_ip:
+            # Fallback: 보드 종류(EXIT)로 찾기
+            target_ip = next((ip for ip, dev_id in self._client_types.items() if "EXIT" in dev_id or "DEV-GATE-2" in dev_id), None)
+
+        if target_ip and target_ip in self._clients:
+            try:
+                self._clients[target_ip].sendall(struct.pack(STRUCT_FORMAT, TYPE_CMD_DISPLAY, payload))
+            except OSError:
+                pass
+        else:
+            # 타겟을 못 찾으면 전체 브로드캐스트
+            self._broadcast(TYPE_CMD_DISPLAY, payload)
+
+    def _broadcast(self, typ: int, payload: bytes) -> None:
+        packet = struct.pack(STRUCT_FORMAT, typ, payload)
+        for ip, conn in list(self._clients.items()):
+            try:
+                conn.sendall(packet)
+            except OSError:
+                self._remove_client(ip)
 
     # ───────── 스레드 메인 루프 ─────────
     def run(self) -> None:  # type: ignore[override]
-        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind((self._host, self._port))
-        server.listen(5)
-        self._on_log(f"[GATE] ESP32 게이트 서버 리슨 시작 ({self._host}:{self._port})")
+        try:
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            print(f"[DEBUG] Attempting to bind TCP 8080 on {self._host}")
+            server.bind((self._host, self._port))
+            server.listen(5)
+            self._on_log(f"[GATE] ESP32 게이트 서버 리슨 시작 ({self._host}:{self._port})")
+            print(f"[DEBUG] TCP Server listening on {self._port} successfully")
+        except Exception as e:
+            print(f"[ERROR] TCP Server bind failed: {e}")
+            self._on_log(f"[ERROR] TCP 서버 시작 실패: {e}")
+            return
 
         try:
             while not self._stop_flag.is_set():
@@ -130,26 +208,42 @@ class Esp32GateServer(threading.Thread):
                     continue
 
                 conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                self._client = conn
-                self._current_ip = addr[0]
-                self._on_log(f"[GATE] ESP32 보드 연결됨 ({addr[0]}:{addr[1]})")
-                self._on_state_change(True)
-                self._handle_client(conn, addr)
-                self._client = None
-                self._current_ip = None
+                ip = addr[0]
+                self._clients[ip] = conn
+                self._log(f"[GATE] ESP32 보드 연결됨 ({addr[0]}:{addr[1]})", ip=ip)
+                self._notify_listeners("on_state_change", True, ip=ip)
+                
+                # 핸들러를 별도 스레드로 분리 (여러 클라이언트 대응)
+                threading.Thread(target=self._handle_client, args=(conn, addr), daemon=True).start()
         finally:
             try:
                 server.close()
             except Exception:
                 pass
 
+    def _remove_client(self, ip: str) -> None:
+        if ip in self._clients:
+            try:
+                self._clients[ip].close()
+            except:
+                pass
+            del self._clients[ip]
+            if ip in self._client_types:
+                del self._client_types[ip]
+            if ip in self._device_list_bufs:
+                del self._device_list_bufs[ip]
+        if not self._clients:
+            self._notify_listeners("on_state_change", False, ip=ip)
+
     def stop(self) -> None:
         self._stop_flag.set()
-        try:
-            if self._client:
-                self._client.close()
-        except Exception:
-            pass
+        for ip, conn in list(self._clients.items()):
+            try:
+                conn.close()
+            except:
+                pass
+        self._clients.clear()
+        self._client_types.clear()
 
     # ───────── 내부 처리 ─────────
     def _handle_client(self, conn: socket.socket, addr: Any) -> None:
@@ -188,13 +282,20 @@ class Esp32GateServer(threading.Thread):
                     ev = payload[0]
                     src = payload[1:17].decode("utf-8", errors="ignore").strip("\x00 ")
                     ext = payload[17:32].decode("utf-8", errors="ignore").strip("\x00 ")
-
-                    if ev == 99:
-                        line = f"[ERROR] {src} 초기화 실패 ({ext})"
-                    else:
-                        name = EV_NAMES.get(ev, f"EV_{ev}")
-                        line = f"[EVENT] {name} | {src}" + (f" | {ext}" if ext else "")
-                    self._on_log(line)
+                    self._on_log(f"[EVENT] ev={ev} ({EV_NAMES.get(ev, 'UNKNOWN')}) src={src} ext={ext}")
+                    
+                    # LCD 보드로 이벤트 텍스트 전달 (Board 2 -> Board 1 LCD)
+                    if ev == 1: # ENTRY
+                        self.send_lcd_text("CAR DETECTED", "AT ENTRY")
+                    elif ev == 2: # EXIT
+                        # EXIT는 이미 본인 보드에서 출력하므로 굳이 안 보내도 되지만 동기화 차원에서 보낼 수 있음
+                        pass
+                    elif ev == 4: # GATE_OPEN
+                        self.send_lcd_text("GATE OPENED", src)
+                    elif ev == 5: # GATE_CLOSED
+                        self.send_lcd_text("GATE CLOSED", src)
+                    
+                    self._on_event(ev, src, ext)
 
                     # 노상 주차면 센서 이벤트인 경우(SPOT_1~4, OCCUPIED/EMPTY),
                     # 상위(DeviceManager)로 콜백을 주어 parking_slots 와 동기화한다.
@@ -209,6 +310,8 @@ class Esp32GateServer(threading.Thread):
                     uid = payload[1:17].decode("utf-8", errors="ignore").strip("\x00 ")
                     siteid = payload[17:32].decode("utf-8", errors="ignore").strip("\x00 ")
                     self._on_log(f"[RFID] mode={mode} UID={uid} SiteID={siteid}")
+                    # LCD 보드로 즉시 전송
+                    self.send_lcd_text("RFID READ", uid)
                     continue
 
                 # 4. 장비 목록
@@ -217,11 +320,17 @@ class Esp32GateServer(threading.Thread):
                     total = payload[1]
                     guid = payload[2:18].decode("utf-8", errors="ignore").strip("\x00 ")
                     name = payload[18:32].decode("utf-8", errors="ignore").strip("\x00 ")
-                    self._device_list_buf[idx] = {"guid": guid, "name": name}
-                    if len(self._device_list_buf) >= total:
-                        lst = [self._device_list_buf[i] for i in range(total)]
-                        self._device_list_buf.clear()
-                        self._on_device_list(lst)
+                    
+                    ip = addr[0]
+                    if ip not in self._device_list_bufs:
+                        self._device_list_bufs[ip] = {}
+                    buf = self._device_list_bufs[ip]
+                    
+                    buf[idx] = {"guid": guid, "name": name}
+                    if len(buf) >= total:
+                        lst = [buf[i] for i in range(total)]
+                        buf.clear()
+                        self._notify_listeners("on_device_list", lst, ip=ip)
                     continue
 
                 # 5. 장비 등록 패킷 (device_guid, device_name, ip)
@@ -229,18 +338,13 @@ class Esp32GateServer(threading.Thread):
                     guid = payload[0:16].decode("utf-8", errors="ignore").strip("\x00 ")
                     name = payload[16:32].decode("utf-8", errors="ignore").strip("\x00 ")
                     ip = addr[0]
-                    self._on_log(
-                        f"[REG] device_register 수신 guid={guid} name={name} ip={ip}"
+                    self._client_types[ip] = guid 
+                    self._log(
+                        f"[REG] device_register 수신 guid={guid} name={name} ip={ip}", ip=ip
                     )
-                    self._on_register(guid, name, ip)
+                    self._notify_listeners("on_register", guid, name, ip=ip)
                     continue
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-            self._device_list_buf.clear()
-            # 연결 종료 시점의 IP를 사용해 상태 변경 알림
-            self._on_log(f"[GATE] ESP32 보드 연결 종료 ({addr[0]}:{addr[1]})")
-            self._on_state_change(False)
+            self._remove_client(addr[0])
+            self._log(f"[GATE] ESP32 보드 연결 종료 ({addr[0]}:{addr[1]})", ip=addr[0])
 

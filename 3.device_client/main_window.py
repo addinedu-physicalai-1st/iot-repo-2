@@ -19,9 +19,9 @@ from architect_manager import ArchitectManager
 from device_manager import DeviceManager
 from info_manager import InfoManager
 from transmission_manager import TransmissionManager
-from gate_test_dialog import GateTestDialog
-from parking_guide_test_dialog import ParkingGuideTestDialog
-from lpr_enter_test_dialog import LprEnterTestDialog
+from exit_test_dialog import ExitTestDialog
+from entry_test_dialog import EntryTestDialog
+# from lpr_enter_test_dialog import LprEnterTestDialog
 
 
 class MainWindow(QMainWindow):
@@ -45,9 +45,9 @@ class MainWindow(QMainWindow):
         self._device_mgr = device_manager
         self._arch_mgr = architect_manager
         self._tx = transmission_manager
-        self._gate_dialog: GateTestDialog | None = None
-        self._parking_dialog: ParkingGuideTestDialog | None = None
-        self._lpr_dialog: LprEnterTestDialog | None = None
+        self._exit_dialog: ExitTestDialog | None = None
+        self._entry_dialog: EntryTestDialog | None = None
+        self._lpr_dialog: Any | None = None # LprEnterTestDialog missing
 
         self.setWindowTitle("스마트 주차장 - 디바이스 클라이언트 대시보드")
         self.resize(1100, 700)
@@ -96,16 +96,17 @@ class MainWindow(QMainWindow):
         self.btn_refresh.clicked.connect(self.refresh_from_server)
         btn_row.addWidget(self.btn_refresh)
 
-        self.btn_gate_test = QPushButton ("esp32 board_1_1 테스트") #("입구 차단기 테스트") => 입구 차단기 이지만 RFID, IR 센서가 있어 보드 테스트로 명명.
-        self.btn_gate_test.clicked.connect(self.open_gate_test_dialog)
-        btn_row.addWidget(self.btn_gate_test)
+        self.btn_exit_test = QPushButton("출차 (LCD) 테스트 (ESP32 보드2)")
+        self.btn_exit_test.clicked.connect(self.open_exit_test_dialog)
+        btn_row.addWidget(self.btn_exit_test)
 
-        self.btn_parking_test = QPushButton("esp32_board2 파킹 가이드 테스트")
-        self.btn_parking_test.clicked.connect(self.open_parking_guide_test_dialog)
-        btn_row.addWidget(self.btn_parking_test)
-
+        self.btn_entry_test = QPushButton("입차 (게이트) 테스트 (ESP32 보드1)")
+        self.btn_entry_test.clicked.connect(self.open_entry_test_dialog)
+        btn_row.addWidget(self.btn_entry_test)
+        
         self.btn_lpr_test = QPushButton("입구 LPR 카메라 테스트 (esp32_lpr_enter)")
-        self.btn_lpr_test.clicked.connect(self.open_lpr_enter_test_dialog)
+        # self.btn_lpr_test.clicked.connect(self.open_lpr_enter_test_dialog)
+        self.btn_lpr_test.setEnabled(False) # Disabled due to missing module
         btn_row.addWidget(self.btn_lpr_test)
 
         btn_row.addStretch()
@@ -135,29 +136,30 @@ class MainWindow(QMainWindow):
         self._update_devices_table(self._info.devices)
         self.statusBar().showMessage("데이터 갱신 완료", 2000)
 
-    def open_gate_test_dialog(self) -> None:
-        """입구 차단기(ESP32 보드1) 테스트용 팝업을 연다."""
-        if self._gate_dialog is None:
-            self._gate_dialog = GateTestDialog(self._device_mgr, self)
-        self._gate_dialog.show()
-        self._gate_dialog.raise_()
-        self._gate_dialog.activateWindow()
+    def open_exit_test_dialog(self) -> None:
+        """출차 차단기(ESP32 보드2) 테스트용 팝업을 연다."""
+        if self._exit_dialog is None:
+            self._exit_dialog = ExitTestDialog(self._device_mgr, parent=self)
+        self._exit_dialog.show()
+        self._exit_dialog.raise_()
+        self._exit_dialog.activateWindow()
 
-    def open_parking_guide_test_dialog(self) -> None:
-        """esp32_board2(파킹 가이드) 이벤트를 확인하는 팝업을 연다."""
-        if self._parking_dialog is None:
-            self._parking_dialog = ParkingGuideTestDialog(self._device_mgr, self)
-        self._parking_dialog.show()
-        self._parking_dialog.raise_()
-        self._parking_dialog.activateWindow()
+    def open_entry_test_dialog(self) -> None:
+        """입차 차단기(ESP32 보드1) 테스트용 팝업을 연다."""
+        if self._entry_dialog is None:
+            self._entry_dialog = EntryTestDialog(self._device_mgr, parent=self)
+        self._entry_dialog.show()
+        self._entry_dialog.raise_()
+        self._entry_dialog.activateWindow()
 
     def open_lpr_enter_test_dialog(self) -> None:
         """입구 LPR 카메라(esp32_lpr_enter) 테스트용 팝업을 연다."""
-        if self._lpr_dialog is None:
-            self._lpr_dialog = LprEnterTestDialog(self._tx, self)
-        self._lpr_dialog.show()
-        self._lpr_dialog.raise_()
-        self._lpr_dialog.activateWindow()
+        # if self._lpr_dialog is None:
+        #     self._lpr_dialog = LprEnterTestDialog(self._tx, self)
+        # self._lpr_dialog.show()
+        # self._lpr_dialog.raise_()
+        # self._lpr_dialog.activateWindow()
+        pass
 
     def _update_summary(self) -> None:
         health = self._info.server_health or {}

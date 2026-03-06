@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+from typing import Dict, List
+
 from info_manager import InfoManager
 from transmission_manager import TransmissionManager
 from esp32_gate_server import Esp32GateServer
@@ -21,8 +24,15 @@ class DeviceManager:
         self._info = info_manager
         self._tx = transmission_manager
         self._gate_server: Esp32GateServer | None = None
-        self._gate_logs: list[str] = []
-        self._gate_devices: list[dict] = []
+        self._gate_connected: bool = False
+        
+        # 입/출구 분리를 위해 GUID 별로 로그와 장치 구성을 관리
+        self._per_device_logs: Dict[str, List[str]] = {}
+        self._per_device_hw: Dict[str, List[Dict[str, str]]] = {}
+        
+        # GUID -> IP 매핑 (연결된 장치 추적용)
+        self._guid_to_ip: Dict[str, str] = {}
+        self._ip_to_guid: Dict[str, str] = {}
         self._gate_connected: bool = False
         # parking_slots, device 등록 정보 등을 위한 내부 상태
         self._parking_state: dict[str, bool] = {}
@@ -32,27 +42,22 @@ class DeviceManager:
         - ESP32 보드1(입구 차단기) TCP 서버 스레드 시작
         - 향후 ESP32-CAM/시리얼 장치 스레드도 여기서 시작 예정
         """
+        # 앱 기동 시, 현재 클라이언트가 관리하는 장비들의 연결 상태를 모두 초기화 
+        self._tx.reset_device_connections(["gate_controller", "street_parking_controller"])
+
         if self._gate_server is None:
             self._gate_server = Esp32GateServer(
                 host="0.0.0.0",
                 port=8080,
                 on_log=self._append_gate_log,
-                on_device_list=self._set_gate_devices,
+                on_device_list=self._on_device_list,
                 on_state_change=self._on_gate_state_change,
                 on_register=self._on_device_register,
                 on_parking_event=self._on_parking_event,
+                on_event=self._on_device_event,
             )
             self._gate_server.start()
 
-        # 앱 기동 직후에는 DB 에 남아있던 이전 연결 상태를 신뢰하지 않고,
-        # gate_controller / street_parking_controller 를 모두 끊김으로 초기화한다.
-        # 이후 실제 소켓 연결/keep-alive 기준으로만 is_connected 를 다시 세팅.
-        try:
-            self._tx.set_gate_connected(False)
-            self._tx.set_street_parking_connected(False)
-        except Exception:
-            # 초기화 실패는 치명적이지 않으므로 로그만 남기고 무시
-            self._append_gate_log("[GATE] 초기 연결 상태 리셋 실패 (DB)")
 
     def stop(self) -> None:
         """start 에서 시작한 장치 관련 스레드를 종료."""
@@ -61,111 +66,129 @@ class DeviceManager:
             self._gate_server = None
 
     # ───────── ESP32 게이트 관련 헬퍼 (UI에서 사용) ─────────
-    def _append_gate_log(self, msg: str) -> None:
-        self._gate_logs.append(msg)
-        # 로그 길이 무한 증가 방지
-        if len(self._gate_logs) > 500:
-            self._gate_logs = self._gate_logs[-200:]
+    def _append_gate_log(self, msg: str, guid: str | None = None) -> None:
+        # 특정 GUID 가 없으면 SYSTEM 로그로 분류
+        target_guid = guid or "SYSTEM"
+        if target_guid not in self._per_device_logs:
+            self._per_device_logs[target_guid] = []
+        
+        timestamp = time.strftime("[%H:%M:%S]")
+        self._per_device_logs[target_guid].append(f"{timestamp} {msg}")
+        # 최대 100줄만 유지
+        if len(self._per_device_logs[target_guid]) > 100:
+            self._per_device_logs[target_guid].pop(0)
+        
+        # 콘솔 출력 (디버깅용)
+        print(f"[{target_guid}] {msg}")
 
-    def _set_gate_devices(self, devices: list[dict]) -> None:
-        self._gate_devices = devices
-
-    def _on_gate_state_change(self, connected: bool) -> None:
-        # 중복 호출 방지
-        if self._gate_connected == connected:
-            return
-        self._gate_connected = connected
-        # 서버(FastAPI)에 gate_controller / street_parking_controller 장비 연결 상태 반영
+    def _on_gate_state_change(self, connected: bool, ip: str | None = None) -> None:
+        # 서버(FastAPI)에 장비 연결 상태 반영
         try:
-            ip = None
-            if self._gate_server is not None:
-                # 최근 연결된 ESP32 보드의 IP
-                ip = getattr(self._gate_server, "_current_ip", None)
-
             if ip:
-                # 특정 IP 와 매칭되는 장비만 연결 상태 반영
-                self._tx.set_gate_connected_by_ip(ip, connected)
-                self._tx.set_street_parking_connected_by_ip(ip, connected)
+                self._tx.set_device_connected_by_ip(ip, connected)
+                if not connected:
+                    # 연결 해제 시 GUID 매핑 정리 (선택적)
+                    guid = self._ip_to_guid.get(ip)
+                    if guid:
+                        self._append_gate_log(f"[GATE] {guid} ({ip}) 연결 해제", guid=guid)
+                        # 연결 해제 시 해당 장치의 로그 및 HW 정보도 초기화 (선택적)
+                        self._per_device_logs.pop(guid, None)
+                        self._per_device_hw.pop(guid, None)
+                        self._guid_to_ip.pop(guid, None)
+                        self._ip_to_guid.pop(ip, None)
             else:
-                # IP 정보를 얻지 못한 경우, 타입 전체에 대해 fallback 처리
-                self._tx.set_gate_connected(connected)
-                self._tx.set_street_parking_connected(connected)
+                pass
         except Exception:
-            # 서버 반영 실패 시에도 로컬 로그는 남긴다.
             state = "연결" if connected else "해제"
-            self._append_gate_log(f"[GATE] 서버 반영 실패 (상태={state})")
+            self._append_gate_log(f"[GATE] 서버 반영 실패 (상태={state}, IP={ip})")
+
+    def _on_device_list(self, lst: List[Dict[str, str]], ip: str | None = None) -> None:
+        """ESP32 로부터 장비 구성(센서/모듈) 목록을 받음."""
+        guid = self._ip_to_guid.get(ip or "")
+        if guid:
+            self._per_device_hw[guid] = lst
+            hw_str = ", ".join([f"{item['guid']}->{item['name']}" for item in lst])
+            self._append_gate_log(f"[HW] 장치 구성 수신: {hw_str}", guid=guid)
+        else:
+            # GUID 를 아직 모르는 경우 IP 로 임시 저장하거나 무시
+            pass
 
     # ───────── 장비 등록(DEVICE_GUID 기반 IP 갱신) ─────────
     def _on_device_register(self, device_guid: str, device_name: str, ip: str) -> None:
-        """
-        ESP32 보드에서 TYPE_DEV_REGISTER 패킷을 보냈을 때 호출된다.
-
-        - device_guid / device_name / ip 를 받아서 TransmissionManager 에 전달
-        - FastAPI → DB 의 devices.ip_address 를 갱신 (DHCP 대응)
-        """
+        """ESP32 가 등록 패킷을 보냄."""
         self._append_gate_log(
-            f"[REG] 등록 요청 수신 guid={device_guid} name={device_name} ip={ip}"
+            f"[REG] device_register 수신 guid={device_guid} name={device_name} ip={ip}", 
+            guid=device_guid
         )
+        
+        # IP 와 GUID 매핑 저장
+        self._ip_to_guid[ip] = device_guid
+        self._guid_to_ip[device_guid] = ip
+        
         try:
             self._tx.update_device_ip_by_guid(device_guid, ip, device_name=device_name)
+            # 등록 성공 시 연결 상태도 True 로 세팅
+            self._tx.set_device_connected_by_guid(device_guid, True)
             self._append_gate_log(
-                f"[REG] DB ip_address 갱신 완료 guid={device_guid} → {ip}"
+                f"[REG] DB 등록 및 연결 완료 guid={device_guid} → {ip}",
+                guid=device_guid
             )
         except Exception as exc:
             self._append_gate_log(
-                f"[REG] DB ip_address 갱신 실패 guid={device_guid} ({exc})"
+                f"[REG] DB 등록 실패 guid={device_guid}: {exc}",
+                guid=device_guid
             )
 
     # ───────── 노상 주차면 이벤트 처리 (parking_slots 동기화) ─────────
-    def _on_parking_event(self, spot_name: str, is_occupied: bool) -> None:
-        """
-        ESP32 보드2(노상 주차면 센서 컨트롤러)에서 SPOT_1~4 이벤트가 올 때 호출된다.
-
-        - 내부 상태(self._parking_state)에 기록
-        - TransmissionManager 를 통해 /parking/slots API 호출 → DB parking_slots 동기화
-        """
-        self._parking_state[spot_name] = is_occupied
-        state_txt = "OCCUPIED" if is_occupied else "EMPTY"
-        self._append_gate_log(f"[PARKING] {spot_name} -> {state_txt}")
-
-        # SPOT_1~4 → S1~S4 로 매핑
-        mapping = {
-            "SPOT_1": "S1",
-            "SPOT_2": "S2",
-            "SPOT_3": "S3",
-            "SPOT_4": "S4",
-        }
-        slot_name = mapping.get(spot_name)
-        if not slot_name:
-            return
-
+    def _on_parking_event(self, spot: str, occupied: bool, ip: str | None = None) -> None:
+        """ESP32 에서 노상 주차면(SPOT_x) 감지 이벤트 수신."""
+        guid = self._ip_to_guid.get(ip or "")
+        self._append_gate_log(f"[PARK] {spot} {'OCCUPIED' if occupied else 'EMPTY'}", guid=guid)
+        # DB 동기화
         try:
-            # 번호판 정보는 현재 없으므로 plate=None
-            self._tx.set_slot_occupied(slot_name, is_occupied, plate=None)
+            self._tx.set_parking_slot_occupied(spot, occupied)
             self._append_gate_log(
-                f"[PARKING] DB 슬롯 갱신 완료 slot={slot_name} occupied={is_occupied}"
+                f"[PARKING] DB 슬롯 갱신 완료 slot={spot} occupied={occupied}", guid=guid
             )
         except Exception as exc:  # noqa: BLE001
             self._append_gate_log(
-                f"[PARKING] DB 슬롯 갱신 실패 slot={slot_name} ({exc})"
+                f"[PARKING] DB 슬롯 갱신 실패 slot={spot} ({exc})", guid=guid
             )
 
-    def get_gate_logs(self) -> list[str]:
-        return list(self._gate_logs)
+    def _on_device_event(self, ev: int, src: str, ext: str, ip: str | None = None) -> None:
+        """ESP32 의 기타 이벤트 (ENTRY, EXIT, RFID 등)"""
+        guid = self._ip_to_guid.get(ip or "")
+        self._append_gate_log(f"[EVENT] ev={ev} src={src} ext={ext}", guid=guid)
+        
+        if ev == 2: # EV_EXIT
+            # 출차 시 로그 전송
+            self._tx.log_exit_event(src)
 
-    def get_gate_devices(self) -> list[dict]:
-        return list(self._gate_devices)
+    def get_gate_logs(self, guid: str | None = None) -> List[str]:
+        if not guid:
+            # Fallback for general logs
+            return self._per_device_logs.get("SYSTEM", [])
+        return self._per_device_logs.get(guid, [])
 
-    def open_gate(self) -> None:
+    def get_gate_devices(self, guid: str | None = None) -> List[Dict[str, str]]:
+        if not guid:
+            return []
+        return self._per_device_hw.get(guid, [])
+
+    def open_gate(self, guid: str | None = None) -> None:
         if self._gate_server:
-            self._gate_server.send_open_gate()
+            self._gate_server.send_open_gate(target_guid=guid)
 
-    def close_gate(self) -> None:
+    def close_gate(self, guid: str | None = None) -> None:
         if self._gate_server:
-            self._gate_server.send_close_gate()
+            self._gate_server.send_close_gate(target_guid=guid)
 
-    def write_siteid(self, site_id: str) -> None:
+    def write_siteid(self, site_id: str, guid: str | None = None) -> None:
         if self._gate_server:
-            self._gate_server.send_write_siteid(site_id)
+            self._gate_server.send_write_siteid(site_id, target_guid=guid)
+
+    def send_lcd_text(self, line1: str, line2: str = "", guid: str | None = None) -> None:
+        if self._gate_server:
+            self._gate_server.send_lcd_text(line1, line2, target_guid=guid)
 
 

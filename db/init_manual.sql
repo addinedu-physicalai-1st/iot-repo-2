@@ -7,10 +7,11 @@ USE smart_parking;
 
 -- 2. 기존 테이블 삭제 (FK 순서 고려: 자식 → 부모)
 DROP TABLE IF EXISTS event_logs;
-DROP TABLE IF EXISTS sensors;
 DROP TABLE IF EXISTS rfid_cards;
 DROP TABLE IF EXISTS residents;
+DROP TABLE IF EXISTS sensors;
 DROP TABLE IF EXISTS parking_slots;
+DROP TABLE IF EXISTS device_clients;
 DROP TABLE IF EXISTS devices;
 
 -- 3. 새 테이블 생성
@@ -143,13 +144,13 @@ INSERT INTO devices (
 VALUES
   -- 입출구 차단기 컨트롤러: IR(입구) + RFID + 게이트 서보 센서 포함
   (
-    '입출구 차단기 컨트롤러_1',
+    '입차 차단기 컨트롤러',
     'gate_controller',
     'CLIENT',
     'ethernet',
     'tcp',
     'socket',
-    '192.168.25.51', -- 입출구 차단기 컨트롤러 IP (esp32_board1_1)
+    '192.168.25.51',
     '8080',
     1,
     0,
@@ -161,13 +162,13 @@ VALUES
   ),
   -- 입출구 차단기 컨트롤러: IR(출구) + LED 제어
   (
-    '입출구 차단기 컨트롤러_2',
+    '출차 차단기 컨트롤러',
     'gate_controller',
     'CLIENT',
     'ethernet',
     'tcp',
     'socket',
-    '192.168.25.52', -- 입출구 차단기 컨트롤러 IP (esp32_board1_2)
+    '192.168.25.52',
     '8080',
     1,
     0,
@@ -250,7 +251,9 @@ VALUES
     NOW()
   )
 ON DUPLICATE KEY UPDATE
+  name = VALUES(name),
   type = VALUES(type),
+  device_guid = VALUES(device_guid),
   device_type = VALUES(device_type),
   ip_address = VALUES(ip_address),
   connection_type = VALUES(connection_type),
@@ -259,7 +262,7 @@ ON DUPLICATE KEY UPDATE
   port_info = VALUES(port_info),
   sensor_guids = VALUES(sensor_guids),
   config = VALUES(config),
-  is_connected = VALUES(is_connected),
+  is_connected = 0,
   is_active = VALUES(is_active),
   updated_at = NOW();
 

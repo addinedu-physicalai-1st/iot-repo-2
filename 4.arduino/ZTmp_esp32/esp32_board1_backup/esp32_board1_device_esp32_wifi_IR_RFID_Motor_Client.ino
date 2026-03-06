@@ -4,11 +4,12 @@
 #include <SPI.h>
 #include <MFRC522.h>
 #include <WiFi.h>
+#include <LiquidCrystal.h>
 
 // [설정] 네트워크 환경
-const char* ssid = "iptime_WiFiCE6D";
-const char* password = "!Tony6251@";
-const char* serverIP = "192.168.25.35";
+const char* ssid = "addinedu_201class_2-2.4G";
+const char* password = "201class2!";
+const char* serverIP = "192.168.0.137";
 const uint16_t serverPort = 8080;
 
 // [안정화 설정]
@@ -44,14 +45,30 @@ UnifiedPacket txPkt;
 UnifiedPacket rxPkt;
 
 TwoWire WirePort2 = TwoWire(1);
-SparkFun_APDS9960 apds = SparkFun_APDS9960();
 SparkFun_APDS9960 apds1 = SparkFun_APDS9960();
 SparkFun_APDS9960 apds2 = SparkFun_APDS9960();
 Servo myServo;
-MFRC522 rfid(5, 22);
+
+// RFID Setup: Moved to avoid LCD/I2C conflicts
+// SS:5, RST:32, SCK:14, MISO:12, MOSI:15
+MFRC522 rfid(5, 32);
 MFRC522::MIFARE_Key key;
 
-const uint16_t LIGHT_THRESHOLD = 10;
+// LCD Setup: User requested RS(13), E(23), D4(19), D5(18), D6(17), D7(16)
+LiquidCrystal lcd(13, 23, 19, 18, 17, 16);
+
+// I2C Setup: User requested SDA(21), SCL(22)
+#define I2C_SDA1 21
+#define I2C_SCL1 22
+
+// Second I2C remains on these pins (can be adjusted if needed)
+#define I2C_SDA2 25
+#define I2C_SCL2 26
+
+// Servo Pin: Moved to Pin 27 to avoid LCD conflict
+#define PIN_SERVO 27
+
+const uint16_t PROXIMITY_THRESHOLD = 50; // Adjust based on physical distance
 const int RFID_BLOCK = 4;
 bool isGateOpen = false;
 bool serverWriteSiteID = false;
@@ -65,11 +82,6 @@ const unsigned long DETECTION_DELAY = 1000;
 const unsigned long PING_INTERVAL_MS = 5000;
 const unsigned long PONG_TIMEOUT_MS = 5000;
 
-#define I2C_SDA1 32
-#define I2C_SCL1 14
-#define I2C_SDA2 25
-#define I2C_SCL2 26
-
 // 센서별 GUID(16자) + 영문 센서명(14자). 접속 시 서버 전송 → DB/리스트 연동
 #define DEVICE_COUNT 4
 static const struct { const char guid[17]; const char name[15]; } DEVICE_LIST[DEVICE_COUNT] = {
@@ -79,6 +91,15 @@ static const struct { const char guid[17]; const char name[15]; } DEVICE_LIST[DE
     { "ESP32-GATE-01   ", "GateServo" },
 };
 bool deviceListSent = false;
+
+// Helper: Update LCD Display
+void updateDisplay(const char* line1, const char* line2 = "") {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(line1);
+    lcd.setCursor(0, 1);
+    lcd.print(line2);
+}
 
 void sendDeviceList() {
     if (!client.connected()) return;
@@ -115,12 +136,13 @@ void sendRFID(uint8_t mode, const char* uid, const char* siteid) {
     client.write((uint8_t*)&txPkt, sizeof(UnifiedPacket));
 }
 
-// 서버 명령(TYPE_CMD_OPEN) 수신 시에만 호출. 입구/출구/RFID 감지 시에는 호출하지 않음.
+// 서버 명령(TYPE_CMD_OPEN) 수신 시에만 호출.
 void openGate(const char* source) {
     if (!isGateOpen) {
         isGateOpen = true;
         sendEvent(EV_GATE_OPEN, source, "");
         Serial.println("ACTION: GATE_OPEN BY " + String(source));
+        updateDisplay("GATE OPENING", source);
         myServo.write(90);
     }
 }
@@ -132,6 +154,7 @@ void closeGate(const char* source) {
         isGateOpen = false;
         sendEvent(EV_GATE_CLOSED, source, "");
         Serial.println("ACTION: GATE_CLOSED BY " + String(source));
+        updateDisplay("GATE CLOSING", source);
     }
 }
 
@@ -148,53 +171,81 @@ uint16_t readLightFromWire1() {
     return (h << 8) | l;
 }
 
+uint8_t readProximityFromWire1() {
+    uint8_t val = 0;
+    WirePort2.beginTransmission(0x39);
+    WirePort2.write(0x9C); // Proximity data register
+    if (WirePort2.endTransmission() != 0) return 0;
+    WirePort2.requestFrom(0x39, 1);
+    if (WirePort2.available() == 1) {
+        val = WirePort2.read();
+    }
+    return val;
+}
+
 void setup() {
     Serial.begin(115200);
-    Serial.println("Init setup : Start (333 - device list)");
-    delay(5000);
+    
+    // Initialize LCD
+    lcd.begin(16, 2);
+    updateDisplay("SYSTEM STARTING", "PLEASE WAIT...");
+    
+    Serial.println("Init setup : Start");
+    delay(2000);
 
     Wire.begin(I2C_SDA1, I2C_SCL1);
     delay(500);
     for (int i = 0; i < MAX_RETRY; i++) {
-        if (apds1.init() && apds1.enableLightSensor(false)) { sensor1_ok = true; break; }
+        if (apds1.init() && apds1.enableProximitySensor(false)) { sensor1_ok = true; break; }
         delay(500);
     }
 
-    delay(INIT_SLEEP_MS);
     WirePort2.begin(I2C_SDA2, I2C_SCL2, 100000);
     delay(500);
     for (int i = 0; i < MAX_RETRY; i++) {
-        if (apds2.init() && apds2.enableLightSensor(false)) { sensor2_ok = true; break; }
+        if (apds2.init() && apds2.enableProximitySensor(false)) { sensor2_ok = true; break; }
         delay(500);
     }
 
-    delay(INIT_SLEEP_MS);
-    SPI.begin();
+    // Initialize SPI with custom pins (SCK, MISO, MOSI)
+    SPI.begin(14, 12, 15, 5); 
     rfid.PCD_Init();
     for (byte i = 0; i < 6; i++) key.keyByte[i] = 0xFF;
 
-    delay(INIT_SLEEP_MS);
     myServo.setPeriodHertz(50);
-    myServo.attach(13, 500, 2400);
+    myServo.attach(PIN_SERVO, 500, 2400);
     myServo.write(0);
 
-    delay(INIT_SLEEP_MS);
+    updateDisplay("CONNECTING WIFI", ssid);
     WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) delay(500);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
     Serial.println("WiFi Connected.");
+    updateDisplay("WIFI CONNECTED", WiFi.localIP().toString().c_str());
 
-    if (client.connect(serverIP, serverPort))
+    if (client.connect(serverIP, serverPort)) {
         Serial.println("Server Connected.");
+        updateDisplay("SERVER CONNECTED", "PARKING SYSTEM");
+    } else {
+        updateDisplay("SERVER FAILED", "RETRYING...");
+    }
+    
     Serial.println("Init setup : End");
+    delay(1000);
+    updateDisplay("READY", "EXIT GATE");
 }
 
 void loop() {
     if (!client.connected()) {
         client.stop();
         deviceListSent = false;
+        updateDisplay("RECONNECTING...", "SERVER");
         if (client.connect(serverIP, serverPort)) {
             lastKeepAliveTime = millis();
             Serial.println("Reconnected to Server.");
+            updateDisplay("RECONNECTED", "EXIT GATE");
         } else {
             delay(5000);
             return;
@@ -233,7 +284,6 @@ void loop() {
         lastKeepAliveTime = millis();
     }
 
-    // 게이트 열기/닫기 테스트: 서버에서 보낸 명령으로만 처리 (입구/출구/RFID 감지 시에는 이벤트만 전송)
     if (client.available() >= sizeof(UnifiedPacket)) {
         client.read((uint8_t*)&rxPkt, sizeof(UnifiedPacket));
         if (rxPkt.type == TYPE_CMD_OPEN) {
@@ -245,26 +295,31 @@ void loop() {
             serverSiteID[15] = '\0';
             serverWriteSiteID = true;
             Serial.println("Ready to write SiteID to card...");
+            updateDisplay("READY TO WRITE", "TAP CARD...");
         }
     }
 
     if (millis() - lastDetectionTime > DETECTION_DELAY) {
-        uint16_t l1 = 0, l2 = 0;
-        if (sensor1_ok && apds1.readAmbientLight(l1) && l1 > 0 && l1 <= LIGHT_THRESHOLD) {
+        uint8_t p1 = 0, p2 = 0;
+        // Sensor 1 (Pins 21/22) -> EXIT as per user request
+        if (sensor1_ok && apds1.readProximity(p1) && p1 >= PROXIMITY_THRESHOLD) {
             char buf[16];
-            snprintf(buf, sizeof(buf), "L:%d", l1);
-            sendEvent(EV_ENTRY, "ENTRY", buf);
-            Serial.printf("ENTRY_DETECTED (Light: %d)\n", l1);
+            snprintf(buf, sizeof(buf), "P:%d", p1);
+            sendEvent(EV_EXIT, "EXIT", buf);
+            Serial.printf("EXIT_DETECTED (Prox: %d)\n", p1);
+            updateDisplay("CAR EXITS NOW", "THANK YOU!");
             lastDetectionTime = millis();
         }
         delay(10);
+        // Sensor 2 (Pins 25/26) -> ENTRY
         if (sensor2_ok) {
-            l2 = readLightFromWire1();
-            if (l2 > 0 && l2 <= LIGHT_THRESHOLD) {
+            p2 = readProximityFromWire1();
+            if (p2 >= PROXIMITY_THRESHOLD) {
                 char buf[16];
-                snprintf(buf, sizeof(buf), "L:%d", l2);
-                sendEvent(EV_EXIT, "EXIT", buf);
-                Serial.printf("EXIT_DETECTED (Light: %d)\n", l2);
+                snprintf(buf, sizeof(buf), "P:%d", p2);
+                sendEvent(EV_ENTRY, "ENTRY", buf);
+                Serial.printf("ENTRY_DETECTED (Prox: %d)\n", p2);
+                updateDisplay("CAR DETECTED", "AT ENTRY");
                 lastDetectionTime = millis();
             }
         }
@@ -275,6 +330,9 @@ void loop() {
         char siteStr[16] = {0};
         for (byte i = 0; i < rfid.uid.size && i < 4; i++)
             snprintf(uidStr + i * 2, sizeof(uidStr) - i * 2, "%02x", rfid.uid.uidByte[i]);
+        
+        updateDisplay("RFID READ", uidStr);
+        
         MFRC522::StatusCode status = rfid.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, RFID_BLOCK, &key, &(rfid.uid));
         if (status == MFRC522::STATUS_OK) {
             if (serverWriteSiteID) {
@@ -283,19 +341,27 @@ void loop() {
                 memcpy(buf, serverSiteID, 15);
                 rfid.MIFARE_Write(RFID_BLOCK, buf, 16);
                 Serial.println("SiteID written to card.");
+                updateDisplay("WRITE SUCCESS", serverSiteID);
                 serverWriteSiteID = false;
                 sendRFID(2, uidStr, serverSiteID);
             } else {
                 byte buf[18];
                 byte sz = 18;
-                if (rfid.MIFARE_Read(RFID_BLOCK, buf, &sz) == MFRC522::STATUS_OK)
+                if (rfid.MIFARE_Read(RFID_BLOCK, buf, &sz) == MFRC522::STATUS_OK) {
                     memcpy(siteStr, buf, 15);
+                    updateDisplay("ACCESS GRANTED", siteStr);
+                }
                 sendRFID(0, uidStr, siteStr);
             }
+        } else {
+            updateDisplay("AUTH FAILED", "TRY AGAIN");
         }
         rfid.PICC_HaltA();
         rfid.PCD_StopCrypto1();
-        delay(500);
+        delay(1000);
+        updateDisplay("READY", "EXIT GATE");
     }
     delay(50);
 }
+
+

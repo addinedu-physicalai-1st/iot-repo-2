@@ -49,34 +49,15 @@ class TransmissionManager:
         self._info.update_from_server(health=health, devices=devices)
 
     # ───────── 디바이스 연결 상태 업데이트 ─────────
-    def set_gate_connected(self, connected: bool) -> None:
+    def set_device_connected_by_guid(self, guid: str, connected: bool) -> None:
         """
-        gate_controller 타입 장비의 is_connected 플래그를 서버/DB 에 반영하고,
-        InfoManager 상태도 갱신한다.
-        """
-        devices: List[Dict[str, Any]] = self._api.list_devices()
-        changed = False
-        for d in devices:
-            if (d.get("type") or "").lower() == "gate_controller":
-                if bool(d.get("is_connected")) != connected:
-                    self._api.update_device_is_connected(d, connected)
-                    d["is_connected"] = connected
-                    changed = True
-        if changed:
-            # 변경된 devices 리스트를 바로 InfoManager 에 반영
-            self._info.update_from_server(
-                health=self._info.server_health,
-                devices=devices,
-            )
-
-    def set_gate_connected_by_ip(self, ip: str, connected: bool) -> None:
-        """
-        gate_controller 타입 중 특정 IP 에 해당하는 장비만 is_connected 업데이트.
+        특정 GUID 를 가진 장비의 is_connected 플래그를 서버/DB 에 반영.
         """
         devices: List[Dict[str, Any]] = self._api.list_devices()
         changed = False
         for d in devices:
-            if (d.get("type") or "").lower() == "gate_controller" and (d.get("ip_address") or "") == ip:
+            guid_in_db = (d.get("device_guid") or "").strip("\x00 ")
+            if guid_in_db == guid:
                 if bool(d.get("is_connected")) != connected:
                     self._api.update_device_is_connected(d, connected)
                     d["is_connected"] = connected
@@ -87,15 +68,14 @@ class TransmissionManager:
                 devices=devices,
             )
 
-    def set_street_parking_connected(self, connected: bool) -> None:
+    def set_device_connected_by_ip(self, ip: str, connected: bool) -> None:
         """
-        street_parking_controller 타입(esp32_board2) 장비의 is_connected 플래그를
-        서버/DB 에 반영하고 InfoManager 상태도 갱신한다.
+        특정 IP 를 가진 장비의 is_connected 플래그를 서버/DB 에 반영.
         """
         devices: List[Dict[str, Any]] = self._api.list_devices()
         changed = False
         for d in devices:
-            if (d.get("type") or "").lower() == "street_parking_controller":
+            if (d.get("ip_address") or "") == ip:
                 if bool(d.get("is_connected")) != connected:
                     self._api.update_device_is_connected(d, connected)
                     d["is_connected"] = connected
@@ -106,18 +86,20 @@ class TransmissionManager:
                 devices=devices,
             )
 
-    def set_street_parking_connected_by_ip(self, ip: str, connected: bool) -> None:
+    def reset_device_connections(self, device_types: List[str]) -> None:
         """
-        street_parking_controller 타입(esp32_board2) 중 특정 IP 장비만 업데이트.
+        지정된 타입의 모든 디바이스의 연결 상태를 False 로 초기화한다.
+        (앱 기동 시 기존에 DB에 남아있던 연결 상태를 정리하기 위함)
         """
         devices: List[Dict[str, Any]] = self._api.list_devices()
         changed = False
         for d in devices:
-            if (d.get("type") or "").lower() == "street_parking_controller" and (d.get("ip_address") or "") == ip:
-                if bool(d.get("is_connected")) != connected:
-                    self._api.update_device_is_connected(d, connected)
-                    d["is_connected"] = connected
+            if (d.get("type") or "").lower() in device_types:
+                if bool(d.get("is_connected")):
+                    self._api.update_device_is_connected(d, False)
+                    d["is_connected"] = False
                     changed = True
+        
         if changed:
             self._info.update_from_server(
                 health=self._info.server_health,
@@ -145,24 +127,31 @@ class TransmissionManager:
         target: Dict[str, Any] | None = None
 
         for d in devices:
-            guid_in_db = (d.get("device_guid") or "").strip()
-            name_in_db = (d.get("name") or "").strip()
-            if device_guid and device_name:
-                # guid 와 name 이 모두 일치해야만 유효한 등록으로 인정
-                if guid_in_db == device_guid.strip() and name_in_db == (device_name or "").strip():
-                    target = d
-                    break
-            elif device_guid:
-                if guid_in_db == device_guid.strip():
-                    target = d
-                    break
-            elif device_name:
-                if name_in_db == (device_name or "").strip():
-                    target = d
-                    break
+            guid_in_db = (d.get("device_guid") or "").strip("\x00 ")
+            name_in_db = (d.get("name") or "").strip("\x00 ")
+            
+            clean_guid = device_guid.strip("\x00 ")
+            clean_name = (device_name or "").strip("\x00 ")
+            
+            # Debug: what are we looking at?
+            print(f"[DEBUG-REG] Comparing DB({guid_in_db!r} / {name_in_db!r}) with RECV({clean_guid!r} / {clean_name!r})")
+
+            # Priority 1: Exact GUID match (GUID should be unique)
+            if clean_guid and guid_in_db == clean_guid:
+                target = d
+                break
+            
+            # Priority 2: Partial GUID match (for truncation handling)
+            if clean_guid and (guid_in_db.startswith(clean_guid) or clean_guid.startswith(guid_in_db)):
+                target = d
+                break
+
+            # Priority 3: Name match (if GUID not provided or not matched)
+            if not target and clean_name and name_in_db == clean_name:
+                target = d
+                break
 
         if target is None:
-            # 등록 정보와 매칭되는 devices 레코드가 없으면 IP 갱신을 하지 않는다.
             print(f"[LPR-IP] not found in devices: guid={device_guid!r}, name={device_name!r}")
             return
 
@@ -380,6 +369,13 @@ class TransmissionManager:
             return None
         # guid 를 사용해 향후 여러 LPR 카메라 구분 가능하도록 확장 여지를 남긴다.
         return self._lpr_command_queue.pop(0)
+
+    def log_exit_event(self, source: str) -> None:
+        """출차 센서(APDS) 이벤트 발생 시 서버로 로그를 전송한다."""
+        try:
+            self._api.log_event("EXIT_DETECTED", f"출차 차단기 센서 인식 ({source})")
+        except Exception as e:
+            print(f"[TX] 출차 이벤트 전송 실패: {e}")
 
     # ───────── 종료 처리 ─────────
     def close(self) -> None:

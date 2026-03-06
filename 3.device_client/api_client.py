@@ -75,6 +75,7 @@ class DeviceApiClient:
             "port_info": device.get("port_info"),
             "is_connected": is_connected,
             "sensor_guids": device.get("sensor_guids"),
+            "device_guid": device.get("device_guid"),
             "config": device.get("config"),
             "is_active": device.get("is_active", True),
         }
