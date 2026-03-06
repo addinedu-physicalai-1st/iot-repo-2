@@ -33,7 +33,27 @@ class DeviceClientSettings:
 
     @property
     def udp_listen_port(self) -> int:
+        # DB/init_manual.sql 기준: rest_port=7080, udp_port=7070
         return int(os.getenv("UDP_LISTEN_PORT", "7070"))
+
+    # ───────── LPR 입구 카메라(esp32_lpr_enter) 설정 ─────────
+    @property
+    def lpr_enter_rest_port(self) -> int:
+        """
+        esp32_lpr_enter 가 접속하는 REST 서버 포트.
+
+        기본값은 7080 (DB init_manual.sql 의 rest_port 기준).
+        """
+        return int(os.getenv("LPR_ENTER_REST_PORT", "7080"))
+
+    @property
+    def lpr_enter_udp_port(self) -> int:
+        """
+        LPR 입구 카메라 UDP 영상 포트.
+
+        기본값은 LPR_CAMERA_SERVER_UDP_PORT, 없으면 7070.
+        """
+        return int(os.getenv("LPR_CAMERA_SERVER_UDP_PORT", "7070"))
 
     # ESP32 보드 TCP 설정
     @property

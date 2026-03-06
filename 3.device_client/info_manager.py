@@ -16,6 +16,8 @@ class EnvInfo:
     device_no: str
     udp_listen_host: str
     udp_listen_port: int
+    lpr_enter_rest_port: int
+    lpr_enter_udp_port: int
     esp32_1_host: str
     esp32_1_port: int
     esp32_2_host: str
@@ -49,6 +51,8 @@ class InfoManager:
             esp32_1_port=settings.esp32_1_port,
             esp32_2_host=settings.esp32_2_host,
             esp32_2_port=settings.esp32_2_port,
+            lpr_enter_rest_port=settings.lpr_enter_rest_port,
+            lpr_enter_udp_port=settings.lpr_enter_udp_port,
         )
         self._runtime = RuntimeStatus()
 
