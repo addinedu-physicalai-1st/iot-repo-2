@@ -186,7 +186,7 @@ VALUES
     'ethernet',
     'udp,tcp',
     'restapi',
-    '192.168.0.30',
+    '192.168.0.34',
     '7080', -- 주 통신 포트 (REST)
     1,
     0,
@@ -196,6 +196,25 @@ VALUES
     NOW(),
     NOW()
   ),
+  -- LPR 카메라 서버 (ESP32-CAM + PC 서버 연동 (입구카메라))
+  (
+    '출구 LPR 카메라',
+    'lpr_camera',
+    'CLIENT',
+    'ethernet',
+    'udp,tcp',
+    'restapi',
+    '192.168.0.35',
+    '7080', -- 주 통신 포트 (REST)
+    1,
+    0,
+    'ESP32-CAM-02',
+    'DEV-LPR-2',
+    '{"rest_port":7080,"udp_port":7090}',
+    NOW(),
+    NOW()
+  ),
+  -- 노상 주차면 센서 컨트롤러
    (
   '노상 주차면 센서 컨트롤러',
   'street_parking_controller',
@@ -247,7 +266,7 @@ ON DUPLICATE KEY UPDATE
 -- 디바이스 클라이언트 샘플 데이터 (현재는 3.device_client 한 대가 전체 장비를 관리)
 INSERT INTO device_clients (device_no, name, devices_ids, is_active, created_at, updated_at)
 VALUES
-  ('DC-001', '기본 device_client PC', '1,2,3', 1, NOW(), NOW())
+  ('DC-001', '기본 device_client PC', '1,2,3,4,5', 1, NOW(), NOW())
 ON DUPLICATE KEY UPDATE
   name = VALUES(name),
   devices_ids = VALUES(devices_ids),
@@ -302,8 +321,8 @@ ON DUPLICATE KEY UPDATE updated_at = NOW();
 INSERT INTO sensors (guid, name, sensor_type, is_active, created_at, created_by)
 VALUES
   -- ESP32 카메라 모듈
-  ('ESP32-CAM-01',    'CamStream',      'CAMERA',     1, NOW(), 'admin'),
-
+  ('ESP32-CAM-01',    'CamStream_ENTRY',    'CAMERA',     1, NOW(), 'admin'),
+  ('ESP32-CAM-02',    'CamStream_EXIT',     'CAMERA',     1, NOW(), 'admin'),
   -- ESP32 보드1: 입구/출구 차량 감지 센서
   ('ESP32-S1-ENTRY01','EntryVehDetect', 'ENTRY_IR',   1, NOW(), 'admin'),
   ('ESP32-S2-EXIT01', 'ExitVehDetect',  'EXIT_IR',    1, NOW(), 'admin'),
