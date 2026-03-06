@@ -38,7 +38,11 @@ def update_device(device_id: int, device_in: schemas.DeviceCreate, db: Session =
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
+    # device_guid 는 장비를 식별하는 키이므로, 명시적으로 값을 보낼 때만 수정한다.
+    # (payload 에서 None 으로 온 값을 그대로 덮어써서 DB 의 guid 가 사라지는 것을 방지)
     for field, value in device_in.model_dump().items():
+        if field == "device_guid" and value is None:
+            continue
         setattr(device, field, value)
 
     db.add(device)

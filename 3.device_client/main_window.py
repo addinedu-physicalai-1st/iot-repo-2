@@ -22,6 +22,7 @@ from transmission_manager import TransmissionManager
 from gate_test_dialog import GateTestDialog
 from parking_guide_test_dialog import ParkingGuideTestDialog
 from lpr_enter_test_dialog import LprEnterTestDialog
+from lpr_exit_test_dialog import LprExitTestDialog
 
 
 class MainWindow(QMainWindow):
@@ -48,6 +49,7 @@ class MainWindow(QMainWindow):
         self._gate_dialog: GateTestDialog | None = None
         self._parking_dialog: ParkingGuideTestDialog | None = None
         self._lpr_dialog: LprEnterTestDialog | None = None
+        self._lpr_exit_dialog: LprExitTestDialog | None = None
 
         self.setWindowTitle("스마트 주차장 - 디바이스 클라이언트 대시보드")
         self.resize(1100, 700)
@@ -108,6 +110,10 @@ class MainWindow(QMainWindow):
         self.btn_lpr_test.clicked.connect(self.open_lpr_enter_test_dialog)
         btn_row.addWidget(self.btn_lpr_test)
 
+        self.btn_lpr_exit_test = QPushButton("출구 LPR 카메라 테스트 (esp32_lpr_exit)")
+        self.btn_lpr_exit_test.clicked.connect(self.open_lpr_exit_test_dialog)
+        btn_row.addWidget(self.btn_lpr_exit_test)
+
         btn_row.addStretch()
         devices_layout.addLayout(btn_row)
 
@@ -158,6 +164,14 @@ class MainWindow(QMainWindow):
         self._lpr_dialog.show()
         self._lpr_dialog.raise_()
         self._lpr_dialog.activateWindow()
+
+    def open_lpr_exit_test_dialog(self) -> None:
+        """출구 LPR 카메라(esp32_lpr_exit) 테스트용 팝업을 연다."""
+        if self._lpr_exit_dialog is None:
+            self._lpr_exit_dialog = LprExitTestDialog(self._tx, self)
+        self._lpr_exit_dialog.show()
+        self._lpr_exit_dialog.raise_()
+        self._lpr_exit_dialog.activateWindow()
 
     def _update_summary(self) -> None:
         health = self._info.server_health or {}

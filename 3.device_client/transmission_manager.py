@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from api_client import DeviceApiClient
 from esp32_receiver import Esp32UdpReceiver
 from info_manager import InfoManager
+from config import settings
 
 
 class TransmissionManager:
@@ -23,20 +24,44 @@ class TransmissionManager:
     def __init__(self, info_manager: InfoManager) -> None:
         self._info = info_manager
         self._api = DeviceApiClient()
-        # LPR 입구 카메라: 연결 = UDP 7070 패킷 수신 여부 (패킷 있으면 연결, 없으면 10초 후 끊김)
+        # LPR 입구/출구 카메라
+        # - 입구: UDP 포트 settings.lpr_enter_udp_port (기본 7070)
+        # - 출구: UDP 포트 settings.lpr_exit_udp_port  (기본 7090)
+        # - 연결 = 각 포트로 UDP 패킷 수신 여부 (패킷 있으면 연결, 없으면 10초 후 끊김)
         self._lpr_last_seen: float = 0.0
         self._lpr_connected: bool = False
         self._lpr_command_queue: list[str] = []
         self._lpr_frame_queue: Queue = Queue(maxsize=5)
         self._lpr_last_frame_ts: float = 0.0
         self._lpr_udp_receiver: Optional[Esp32UdpReceiver] = None
+        # 출구 LPR 전용 상태/버퍼
+        self._lpr_exit_last_seen: float = 0.0
+        self._lpr_exit_connected: bool = False
+        self._lpr_exit_frame_queue: Queue = Queue(maxsize=5)
+        self._lpr_exit_last_frame_ts: float = 0.0
+        self._lpr_exit_udp_receiver: Optional[Esp32UdpReceiver] = None
 
         # LPR 용 REST 서버 (등록/config/command) — 연결 상태는 UDP 기준으로만 갱신
         self._start_lpr_rest_server()
         self._start_lpr_monitor()
-        # LPR UDP 7070 수신 시작 → 패킷 들어오면 _mark_lpr_seen(), 프레임은 _lpr_frame_queue 에 적재
-        self._lpr_udp_receiver = Esp32UdpReceiver(on_frame=self._on_lpr_udp_frame)
+        # LPR 입구 UDP 수신 시작 → 패킷 들어오면 _mark_lpr_seen(), 프레임은 _lpr_frame_queue 에 적재
+        self._lpr_udp_receiver = Esp32UdpReceiver(
+            host=settings.udp_listen_host,
+            port=settings.lpr_enter_udp_port,
+            on_frame=self._on_lpr_udp_frame,
+        )
         self._lpr_udp_receiver.start()
+        # LPR 출구 UDP 수신 시작 → 프레임은 _lpr_exit_frame_queue 에 적재
+        self._lpr_exit_udp_receiver = Esp32UdpReceiver(
+            host=settings.udp_listen_host,
+            port=settings.lpr_exit_udp_port,
+            on_frame=self._on_lpr_exit_udp_frame,
+        )
+        self._lpr_exit_udp_receiver.start()
+        # 시작 시 입구/출구 LPR 의 is_connected 를 끊김(false) 으로 한 번 강제 동기화해 두면
+        # 예전에 켜져 있던 상태가 DB 에 남아 있어도 실제 상태와 맞출 수 있다.
+        self._set_lpr_connected(False, force=True)
+        self._set_lpr_exit_connected(False, force=True)
 
     # ───────── 서버와의 통신 ─────────
     def refresh_from_server(self) -> None:
@@ -147,19 +172,17 @@ class TransmissionManager:
         for d in devices:
             guid_in_db = (d.get("device_guid") or "").strip()
             name_in_db = (d.get("name") or "").strip()
-            if device_guid and device_name:
-                # guid 와 name 이 모두 일치해야만 유효한 등록으로 인정
-                if guid_in_db == device_guid.strip() and name_in_db == (device_name or "").strip():
-                    target = d
-                    break
-            elif device_guid:
+            # 1순위: device_guid 가 있으면 guid 만으로 매칭 (name 은 참고용)
+            if device_guid:
                 if guid_in_db == device_guid.strip():
                     target = d
                     break
-            elif device_name:
-                if name_in_db == (device_name or "").strip():
-                    target = d
-                    break
+                # guid 가 다르면 이름만 맞아도 다른 장비일 수 있으므로 스킵
+                continue
+            # 2순위: guid 가 없고 device_name 만 있는 경우 이름으로 매칭
+            if device_name and name_in_db == (device_name or "").strip():
+                target = d
+                break
 
         if target is None:
             # 등록 정보와 매칭되는 devices 레코드가 없으면 IP 갱신을 하지 않는다.
@@ -238,17 +261,27 @@ class TransmissionManager:
 
                 if path == "/api/device/config":
                     # 단순 설정 반환: 서버(host), REST 포트, UDP 포트 (연결 상태는 UDP 패킷 기준으로만 갱신)
+                    # guid 쿼리 파라미터를 사용해 입구/출구 LPR 을 구분한다.
                     from config import settings as _settings  # 로컬 import
+
+                    qs = parse_qs(parsed.query or "")
+                    guid = ((qs.get("guid") or [""])[0] or "").strip().upper()
 
                     host_header = self.headers.get("Host", "")
                     host_ip = host_header.split(":")[0] if host_header else ""
                     if not host_ip or host_ip in ("0.0.0.0", "127.0.0.1", "localhost"):
                         host_ip = self.client_address[0]
 
+                    # 기본값: 입구 LPR 설정
+                    udp_port = _settings.lpr_enter_udp_port
+                    # 출구 LPR(DEV-LPR-2) 인 경우에는 출구용 UDP 포트로 내려준다.
+                    if guid == "DEV-LPR-2":
+                        udp_port = _settings.lpr_exit_udp_port
+
                     payload = {
                         "server_host": host_ip,
                         "rest_port": _settings.lpr_enter_rest_port,
-                        "udp_port": _settings.lpr_enter_udp_port,
+                        "udp_port": udp_port,
                     }
                     self._send_json(200, payload)
                     return
@@ -298,7 +331,7 @@ class TransmissionManager:
         thread.start()
 
     def _start_lpr_monitor(self) -> None:
-        """LPR 카메라 연결 모니터: UDP 7070 패킷이 10초 동안 없으면 끊김으로 간주."""
+        """LPR 카메라 연결 모니터: 각 UDP 포트(입구/출구)에 10초 동안 패킷이 없으면 끊김으로 간주."""
 
         def _loop() -> None:
             while True:
@@ -306,18 +339,31 @@ class TransmissionManager:
                 now = time.time()
                 if self._lpr_connected and (now - self._lpr_last_seen > 10.0):
                     self._set_lpr_connected(False)
+                if self._lpr_exit_connected and (now - self._lpr_exit_last_seen > 10.0):
+                    self._set_lpr_exit_connected(False)
 
         t = threading.Thread(target=_loop, daemon=True)
         t.start()
 
     def _on_lpr_udp_frame(self, fno: int, img: Any) -> None:
-        """UDP 7070 으로 프레임 수신 시 호출. 연결 상태 갱신 + 테스트 다이얼로그용 큐에 적재."""
+        """입구 LPR(예: UDP 7070) 프레임 수신 시 호출. 연결 상태 갱신 + 테스트 다이얼로그용 큐에 적재."""
         self._mark_lpr_seen()
         self._lpr_last_frame_ts = time.time()
         try:
             if self._lpr_frame_queue.full():
                 self._lpr_frame_queue.get_nowait()
             self._lpr_frame_queue.put((fno, img))
+        except Exception:
+            pass
+
+    def _on_lpr_exit_udp_frame(self, fno: int, img: Any) -> None:
+        """출구 LPR(예: UDP 7090) 프레임 수신 시 호출. 출구 전용 큐에 적재."""
+        self._mark_lpr_exit_seen()
+        self._lpr_exit_last_frame_ts = time.time()
+        try:
+            if self._lpr_exit_frame_queue.full():
+                self._lpr_exit_frame_queue.get_nowait()
+            self._lpr_exit_frame_queue.put((fno, img))
         except Exception:
             pass
 
@@ -334,10 +380,33 @@ class TransmissionManager:
             return False
         return (time.time() - self._lpr_last_frame_ts) <= timeout_sec
 
+    # 입구/출구를 명시적으로 구분하는 헬퍼 (향후 출구 테스트 UI 등에서 사용)
+    def get_lpr_entry_frame(self) -> Optional[tuple[int, Any]]:
+        return self.get_lpr_frame()
+
+    def has_recent_lpr_entry_frame(self, timeout_sec: float = 5.0) -> bool:
+        return self.has_recent_lpr_frame(timeout_sec=timeout_sec)
+
+    def get_lpr_exit_frame(self) -> Optional[tuple[int, Any]]:
+        try:
+            return self._lpr_exit_frame_queue.get_nowait()
+        except Empty:
+            return None
+
+    def has_recent_lpr_exit_frame(self, timeout_sec: float = 5.0) -> bool:
+        if self._lpr_exit_last_frame_ts <= 0:
+            return False
+        return (time.time() - self._lpr_exit_last_frame_ts) <= timeout_sec
+
     def _mark_lpr_seen(self) -> None:
         self._lpr_last_seen = time.time()
         if not self._lpr_connected:
             self._set_lpr_connected(True)
+
+    def _mark_lpr_exit_seen(self) -> None:
+        self._lpr_exit_last_seen = time.time()
+        if not self._lpr_exit_connected:
+            self._set_lpr_exit_connected(True)
 
     def _handle_lpr_register(self, device_guid: str, device_name: str, ip: str) -> None:
         """esp32_lpr_enter 가 POST /api/device/register 를 호출했을 때 처리."""
@@ -349,9 +418,14 @@ class TransmissionManager:
             pass
         # 연결 상태는 UDP 7070 패킷 수신으로만 갱신 (여기서는 _mark_lpr_seen 호출 안 함)
 
-    def _set_lpr_connected(self, connected: bool) -> None:
-        """lpr_camera_server 타입 장비의 is_connected 플래그를 갱신."""
-        if self._lpr_connected == connected:
+    def _set_lpr_connected(self, connected: bool, force: bool = False) -> None:
+        """입구 LPR(lpr_camera) 장비의 is_connected 플래그를 갱신.
+
+        - DB/init_manual.sql 기준으로 extra_config 안의 udp_port 로
+          입구(7070) / 출구(7090)를 구분한다.
+        - 여기서는 입구 포트(settings.lpr_enter_udp_port)에 해당하는 행만 업데이트한다.
+        """
+        if self._lpr_connected == connected and not force:
             return
         self._lpr_connected = connected
 
@@ -361,6 +435,86 @@ class TransmissionManager:
             typ = (d.get("type") or "").lower()
             # DB/init_manual.sql 기준 type 은 'lpr_camera' 로 저장되어 있음.
             if typ in ("lpr_camera", "lpr_camera_server"):
+                name = (d.get("name") or "").strip()
+                guid = (d.get("device_guid") or "").strip()
+
+                # 1) extra_config 의 udp_port 로 입구/출구를 구분
+                udp_port = None
+                cfg = d.get("extra_config")
+                if isinstance(cfg, str):
+                    try:
+                        cfg_obj = json.loads(cfg)
+                    except Exception:  # noqa: BLE001
+                        cfg_obj = {}
+                elif isinstance(cfg, dict):
+                    cfg_obj = cfg
+                else:
+                    cfg_obj = {}
+                try:
+                    udp_port = int(cfg_obj.get("udp_port")) if "udp_port" in cfg_obj else None
+                except Exception:
+                    udp_port = None
+
+                # 2) udp_port 가 없더라도, 이름/Guid 으로 "입구" 카메라만 선택
+                is_entry_by_name = "입구" in name
+                is_entry_by_guid = guid.upper() in ("DEV-LPR-1",)
+
+                is_entry = False
+                if udp_port is not None:
+                    is_entry = udp_port == settings.lpr_enter_udp_port
+                else:
+                    is_entry = is_entry_by_name or is_entry_by_guid
+
+                if not is_entry:
+                    continue
+
+                if bool(d.get("is_connected")) != connected:
+                    self._api.update_device_is_connected(d, connected)
+                    d["is_connected"] = connected
+                    changed = True
+
+    def _set_lpr_exit_connected(self, connected: bool, force: bool = False) -> None:
+        """출구 LPR(DEV-LPR-2, udp_port=7090) 장비의 is_connected 플래그를 갱신."""
+        if self._lpr_exit_connected == connected and not force:
+            return
+        self._lpr_exit_connected = connected
+
+        devices: List[Dict[str, Any]] = self._api.list_devices()
+        changed = False
+        for d in devices:
+            typ = (d.get("type") or "").lower()
+            if typ in ("lpr_camera", "lpr_camera_server"):
+                name = (d.get("name") or "").strip()
+                guid = (d.get("device_guid") or "").strip()
+
+                udp_port = None
+                cfg = d.get("extra_config")
+                if isinstance(cfg, str):
+                    try:
+                        cfg_obj = json.loads(cfg)
+                    except Exception:  # noqa: BLE001
+                        cfg_obj = {}
+                elif isinstance(cfg, dict):
+                    cfg_obj = cfg
+                else:
+                    cfg_obj = {}
+                try:
+                    udp_port = int(cfg_obj.get("udp_port")) if "udp_port" in cfg_obj else None
+                except Exception:
+                    udp_port = None
+
+                is_exit_by_name = "출구" in name
+                is_exit_by_guid = guid.upper() in ("DEV-LPR-2",)
+
+                is_exit = False
+                if udp_port is not None:
+                    is_exit = udp_port == settings.lpr_exit_udp_port
+                else:
+                    is_exit = is_exit_by_name or is_exit_by_guid
+
+                if not is_exit:
+                    continue
+
                 if bool(d.get("is_connected")) != connected:
                     self._api.update_device_is_connected(d, connected)
                     d["is_connected"] = connected
@@ -386,6 +540,9 @@ class TransmissionManager:
         if self._lpr_udp_receiver:
             self._lpr_udp_receiver.stop()
             self._lpr_udp_receiver = None
+        if self._lpr_exit_udp_receiver:
+            self._lpr_exit_udp_receiver.stop()
+            self._lpr_exit_udp_receiver = None
         self._api.close()
 
 

@@ -59,6 +59,8 @@ void restRegister() {
     url += ":";
     url += String(restPortNum);
     url += "/api/device/register";
+    Serial.print("[666] REST register URL: ");
+    Serial.println(url);
     http.begin(url);
     http.addHeader("Content-Type", "application/json");
     String ipStr = WiFi.localIP().toString();
@@ -69,6 +71,8 @@ void restRegister() {
     body += "\",\"ip\":\"";
     body += ipStr;
     body += "\"}";
+    Serial.print("[666] REST register body: ");
+    Serial.println(body);
     int code = http.POST(body);
     http.end();
     if (code == 200)
@@ -104,12 +108,14 @@ void restPollConfig() {
         restPortNum = (uint16_t)payload.substring(rpStart + 12).toInt();
         if (restPortNum == 0) restPortNum = 7080;
     }
-    int upStart = payload.indexOf("\"udp_port\":");
-    if (upStart >= 0) {
-        udpPortNum = (uint16_t)payload.substring(upStart + 11).toInt();
-        if (udpPortNum == 0) udpPortNum = 7070;
-    }
-    Serial.printf("[666] config → host=%s rest=%u udp=%u\n", serverHostBuf, restPortNum, udpPortNum);
+    // 출구 LPR(DEV-LPR-2)은 항상 로컬에서 설정한 udpPortNum(기본 7090)을 사용한다.
+    // 서버에서 내려주는 udp_port 값(현재 7070)은 무시하지 않으면 입구/출구가 섞인다.
+    // int upStart = payload.indexOf("\"udp_port\":");
+    // if (upStart >= 0) {
+    //     udpPortNum = (uint16_t)payload.substring(upStart + 11).toInt();
+    //     if (udpPortNum == 0) udpPortNum = 7090;
+    // }
+    Serial.printf("[666] config → host=%s rest=%u udp(local)=%u\n", serverHostBuf, restPortNum, udpPortNum);
 }
 
 // REST: 명령 폴링 — 666에서는 사용하지 않음 (기동 후 자동 스트리밍이므로 주석으로 비활성화)
@@ -162,6 +168,8 @@ void udpStreamTask(void* pvParameters) {
 void setup() {
     Serial.begin(115200);
     Serial.println("\n--- ESP32-CAM LPR 666 (auto UDP stream, no REST command) ---");
+    Serial.printf("[666] DEVICE guid=%s name=\"%s\"\n", DEVICE_GUID, DEVICE_NAME);
+    Serial.printf("[666] default restPort=%u udpPort=%u\n", restPortNum, udpPortNum);
 
     camera_config_t config;
     config.ledc_channel = LEDC_CHANNEL_0;
@@ -204,6 +212,7 @@ void setup() {
     Serial.println("\nWiFi Connected.");
     Serial.print("IP Address: ");
     Serial.println(WiFi.localIP());
+    Serial.printf("[666] WiFi SSID=%s\n", ssid);
 
     restRegister();
     restPollConfig();
