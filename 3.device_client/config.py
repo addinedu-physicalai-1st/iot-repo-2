@@ -92,6 +92,24 @@ class DeviceClientSettings:
         # device_clients 테이블과 매칭되는 device_no
         return os.getenv("device_no", "DC-001")
 
+    @property
+    def lpr_plate_model_path(self) -> str:
+        """
+        번호판 인식 YOLO 모델 경로 (best.pt).
+        기본: 3.device_client/lpr_models/best.pt, 없으면 Ztmp_lpr_detect/lpr_system_release/best.pt
+        """
+        default = BASE_DIR / "lpr_models" / "best.pt"
+        if not default.is_file():
+            fallback = (BASE_DIR.parent / "Ztmp_lpr_detect" / "lpr_system_release" / "best.pt").resolve()
+            if fallback.is_file():
+                return str(fallback)
+        default = str(default.resolve())
+        raw = os.getenv("LPR_PLATE_MODEL_PATH", default)
+        p = Path(raw)
+        if not p.is_absolute():
+            p = (BASE_DIR / raw).resolve()
+        return str(p)
+
 
 settings = DeviceClientSettings()
 
