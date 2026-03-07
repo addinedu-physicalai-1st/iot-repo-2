@@ -1,0 +1,7 @@
+paddleocr
+paddlepaddle
+ultralytics
+opencv-python
+numpy
+Pillow
+requests
