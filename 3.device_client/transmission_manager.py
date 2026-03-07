@@ -64,6 +64,33 @@ class TransmissionManager:
         self._set_lpr_exit_connected(False, force=True)
 
     # ───────── 서버와의 통신 ─────────
+    def get_my_managed_device_ids(self) -> List[int]:
+        """
+        .env 의 device_no 와 device_clients 테이블을 매칭해
+        이 device_client 가 관리하는 devices.id 목록을 반환.
+        실패 또는 미설정 시 빈 리스트.
+        """
+        try:
+            dc_list = self._api.list_device_clients()
+            for item in dc_list:
+                if item.get("device_no") == settings.device_no:
+                    ids_str = item.get("devices_ids") or ""
+                    if not ids_str.strip():
+                        return []
+                    result = []
+                    for x in ids_str.split(","):
+                        s = x.strip()
+                        if not s:
+                            continue
+                        try:
+                            result.append(int(s))
+                        except ValueError:
+                            continue
+                    return result
+        except Exception:
+            pass
+        return []
+
     def refresh_from_server(self) -> None:
         """
         서버 /health, /devices 를 조회해서 InfoManager 에 반영.
@@ -74,19 +101,28 @@ class TransmissionManager:
         self._info.update_from_server(health=health, devices=devices)
 
     # ───────── 디바이스 연결 상태 업데이트 ─────────
+    def _managed_device_ids(self) -> Optional[List[int]]:
+        """이 device_client 가 관리하는 device id 집합. 비어있으면 None(전체 허용)."""
+        ids = self.get_my_managed_device_ids()
+        return ids if ids else None
+
     def set_gate_connected(self, connected: bool) -> None:
         """
         gate_controller 타입 장비의 is_connected 플래그를 서버/DB 에 반영하고,
-        InfoManager 상태도 갱신한다.
+        InfoManager 상태도 갱신한다. (device_clients.devices_ids 에 있는 장비만)
         """
         devices: List[Dict[str, Any]] = self._api.list_devices()
+        managed = self._managed_device_ids()
         changed = False
         for d in devices:
-            if (d.get("type") or "").lower() == "gate_controller":
-                if bool(d.get("is_connected")) != connected:
-                    self._api.update_device_is_connected(d, connected)
-                    d["is_connected"] = connected
-                    changed = True
+            if (d.get("type") or "").lower() != "gate_controller":
+                continue
+            if managed is not None and d.get("id") not in managed:
+                continue
+            if bool(d.get("is_connected")) != connected:
+                self._api.update_device_is_connected(d, connected)
+                d["is_connected"] = connected
+                changed = True
         if changed:
             # 변경된 devices 리스트를 바로 InfoManager 에 반영
             self._info.update_from_server(
@@ -97,15 +133,20 @@ class TransmissionManager:
     def set_gate_connected_by_ip(self, ip: str, connected: bool) -> None:
         """
         gate_controller 타입 중 특정 IP 에 해당하는 장비만 is_connected 업데이트.
+        (device_clients.devices_ids 에 있는 장비만)
         """
         devices: List[Dict[str, Any]] = self._api.list_devices()
+        managed = self._managed_device_ids()
         changed = False
         for d in devices:
-            if (d.get("type") or "").lower() == "gate_controller" and (d.get("ip_address") or "") == ip:
-                if bool(d.get("is_connected")) != connected:
-                    self._api.update_device_is_connected(d, connected)
-                    d["is_connected"] = connected
-                    changed = True
+            if (d.get("type") or "").lower() != "gate_controller" or (d.get("ip_address") or "") != ip:
+                continue
+            if managed is not None and d.get("id") not in managed:
+                continue
+            if bool(d.get("is_connected")) != connected:
+                self._api.update_device_is_connected(d, connected)
+                d["is_connected"] = connected
+                changed = True
         if changed:
             self._info.update_from_server(
                 health=self._info.server_health,
@@ -115,16 +156,20 @@ class TransmissionManager:
     def set_street_parking_connected(self, connected: bool) -> None:
         """
         street_parking_controller 타입(esp32_board2) 장비의 is_connected 플래그를
-        서버/DB 에 반영하고 InfoManager 상태도 갱신한다.
+        서버/DB 에 반영. (device_clients.devices_ids 에 있는 장비만)
         """
         devices: List[Dict[str, Any]] = self._api.list_devices()
+        managed = self._managed_device_ids()
         changed = False
         for d in devices:
-            if (d.get("type") or "").lower() == "street_parking_controller":
-                if bool(d.get("is_connected")) != connected:
-                    self._api.update_device_is_connected(d, connected)
-                    d["is_connected"] = connected
-                    changed = True
+            if (d.get("type") or "").lower() != "street_parking_controller":
+                continue
+            if managed is not None and d.get("id") not in managed:
+                continue
+            if bool(d.get("is_connected")) != connected:
+                self._api.update_device_is_connected(d, connected)
+                d["is_connected"] = connected
+                changed = True
         if changed:
             self._info.update_from_server(
                 health=self._info.server_health,
@@ -134,15 +179,20 @@ class TransmissionManager:
     def set_street_parking_connected_by_ip(self, ip: str, connected: bool) -> None:
         """
         street_parking_controller 타입(esp32_board2) 중 특정 IP 장비만 업데이트.
+        (device_clients.devices_ids 에 있는 장비만)
         """
         devices: List[Dict[str, Any]] = self._api.list_devices()
+        managed = self._managed_device_ids()
         changed = False
         for d in devices:
-            if (d.get("type") or "").lower() == "street_parking_controller" and (d.get("ip_address") or "") == ip:
-                if bool(d.get("is_connected")) != connected:
-                    self._api.update_device_is_connected(d, connected)
-                    d["is_connected"] = connected
-                    changed = True
+            if (d.get("type") or "").lower() != "street_parking_controller" or (d.get("ip_address") or "") != ip:
+                continue
+            if managed is not None and d.get("id") not in managed:
+                continue
+            if bool(d.get("is_connected")) != connected:
+                self._api.update_device_is_connected(d, connected)
+                d["is_connected"] = connected
+                changed = True
         if changed:
             self._info.update_from_server(
                 health=self._info.server_health,
@@ -424,12 +474,14 @@ class TransmissionManager:
         - DB/init_manual.sql 기준으로 extra_config 안의 udp_port 로
           입구(7070) / 출구(7090)를 구분한다.
         - 여기서는 입구 포트(settings.lpr_enter_udp_port)에 해당하는 행만 업데이트한다.
+        - device_clients.devices_ids 에 있는 장비만 갱신한다.
         """
         if self._lpr_connected == connected and not force:
             return
         self._lpr_connected = connected
 
         devices: List[Dict[str, Any]] = self._api.list_devices()
+        managed = self._managed_device_ids()
         changed = False
         for d in devices:
             typ = (d.get("type") or "").lower()
@@ -467,6 +519,8 @@ class TransmissionManager:
 
                 if not is_entry:
                     continue
+                if managed is not None and d.get("id") not in managed:
+                    continue
 
                 if bool(d.get("is_connected")) != connected:
                     self._api.update_device_is_connected(d, connected)
@@ -474,12 +528,15 @@ class TransmissionManager:
                     changed = True
 
     def _set_lpr_exit_connected(self, connected: bool, force: bool = False) -> None:
-        """출구 LPR(DEV-LPR-2, udp_port=7090) 장비의 is_connected 플래그를 갱신."""
+        """출구 LPR(DEV-LPR-2, udp_port=7090) 장비의 is_connected 플래그를 갱신.
+        device_clients.devices_ids 에 있는 장비만 갱신한다.
+        """
         if self._lpr_exit_connected == connected and not force:
             return
         self._lpr_exit_connected = connected
 
         devices: List[Dict[str, Any]] = self._api.list_devices()
+        managed = self._managed_device_ids()
         changed = False
         for d in devices:
             typ = (d.get("type") or "").lower()
@@ -513,6 +570,8 @@ class TransmissionManager:
                     is_exit = is_exit_by_name or is_exit_by_guid
 
                 if not is_exit:
+                    continue
+                if managed is not None and d.get("id") not in managed:
                     continue
 
                 if bool(d.get("is_connected")) != connected:
