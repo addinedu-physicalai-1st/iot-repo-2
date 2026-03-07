@@ -137,8 +137,18 @@ class MainWindow(QMainWindow):
             self.label_server.setText(f"서버 상태: 연결 실패 ({e})")
             return
 
-        self._update_summary()
-        self._update_devices_table(self._info.devices)
+        # 이 device_client 가 관리하는 devices 만 표시 (device_clients.devices_ids 기준)
+        managed_ids = self._tx.get_my_managed_device_ids()
+        all_devices = self._info.devices
+        if managed_ids:
+            id_set = set(managed_ids)
+            dev_by_id = {int(d.get("id")): d for d in all_devices if d.get("id") is not None}
+            devices_to_show = [dev_by_id[i] for i in managed_ids if i in dev_by_id]
+        else:
+            devices_to_show = all_devices
+
+        self._update_summary(devices_to_show)
+        self._update_devices_table(devices_to_show)
         self.statusBar().showMessage("데이터 갱신 완료", 2000)
 
     def open_gate_test_dialog(self) -> None:
@@ -173,14 +183,15 @@ class MainWindow(QMainWindow):
         self._lpr_exit_dialog.raise_()
         self._lpr_exit_dialog.activateWindow()
 
-    def _update_summary(self) -> None:
+    def _update_summary(self, devices: List[Dict[str, Any]] | None = None) -> None:
         health = self._info.server_health or {}
         status = health.get("status", "unknown")
         self.label_server.setText(
             f"서버 상태: {status} ({self._info.env.server_base_url})",
         )
 
-        devices = self._info.devices
+        if devices is None:
+            devices = self._info.devices
         total = len(devices)
         active = sum(1 for d in devices if d.get("is_connected"))
         self.label_devices.setText(f"등록 디바이스: {total}개")
