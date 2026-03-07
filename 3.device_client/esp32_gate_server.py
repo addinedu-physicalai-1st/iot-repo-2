@@ -33,7 +33,8 @@ TYPE_CMD_OPEN = 2
 TYPE_CMD_CLOSE = 5
 TYPE_CMD_WRITE = 3
 TYPE_DEVICE_LIST = 4
-TYPE_DEV_REGISTER = 6  # 장비 등록 패킷 (device_guid, device_name)
+TYPE_DEV_REGISTER = 6   # 장비 등록 패킷 (device_guid, device_name)
+TYPE_CMD_DISPLAY = 7    # 서버 → 출구 보드(DEV-GATE-2): LCD 2줄 출력
 
 EV_NAMES = {
     1: "ENTRY_DETECTED",
@@ -79,6 +80,7 @@ class Esp32GateServer(threading.Thread):
         self._on_parking_event = on_parking_event or (lambda spot, occ: None)
 
         self._clients: Dict[tuple, socket.socket] = {}  # (ip, port) -> conn
+        self._client_guids: Dict[tuple, str] = {}      # addr -> device_guid (DEV-GATE-1, DEV-GATE-2 등)
         self._clients_lock = threading.Lock()
         self._stop_flag = threading.Event()
         self._current_ip: Optional[str] = None  # 마지막 연결 IP (호환용)
@@ -128,6 +130,24 @@ class Esp32GateServer(threading.Thread):
         except OSError:
             self._on_log("[CMD] 카드 SiteID 쓰기 전송 실패 (소켓 에러)")
 
+    def send_display(self, line1: str, line2: str) -> None:
+        """출구 차단기(DEV-GATE-2) LCD 2줄 출력 명령. 해당 guid 로 등록된 클라이언트에만 전송."""
+        line1_b = line1.encode("utf-8", errors="replace")[:16].ljust(16, b"\x00")
+        line2_b = line2.encode("utf-8", errors="replace")[:16].ljust(16, b"\x00")
+        payload = line1_b + line2_b
+        data = struct.pack(STRUCT_FORMAT, TYPE_CMD_DISPLAY, payload)
+        with self._clients_lock:
+            for a, conn in list(self._clients.items()):
+                if self._client_guids.get(a) != "DEV-GATE-2":
+                    continue
+                try:
+                    conn.sendall(data)
+                    self._on_log(f"[CMD] 출구 LCD 전송: '{line1}' / '{line2}'")
+                except OSError:
+                    self._on_log("[CMD] 출구 LCD 전송 실패 (소켓 에러)")
+                return
+        self._on_log("[CMD] 출구 보드(DEV-GATE-2) 미연결, LCD 전송 스킵")
+
     # ───────── 스레드 메인 루프 ─────────
     def _serve_client(self, conn: socket.socket, addr: tuple) -> None:
         """한 클라이언트를 담당하는 스레드: 등록 후 _handle_client 실행, 종료 시 해제."""
@@ -142,6 +162,7 @@ class Esp32GateServer(threading.Thread):
         finally:
             with self._clients_lock:
                 self._clients.pop(addr, None)
+                self._client_guids.pop(addr, None)
                 self._current_ip = next(iter(self._clients))[0] if self._clients else None
             try:
                 conn.close()
@@ -181,6 +202,7 @@ class Esp32GateServer(threading.Thread):
                 except Exception:
                     pass
             self._clients.clear()
+            self._client_guids.clear()
             self._current_ip = None
 
     # ───────── 내부 처리 ─────────
@@ -255,11 +277,13 @@ class Esp32GateServer(threading.Thread):
                         self._on_device_list(lst)
                     continue
 
-                # 5. 장비 등록 패킷
+                # 5. 장비 등록 패킷 (addr → guid 매핑 저장, 출구 LCD 명령 대상 식별용)
                 if typ == TYPE_DEV_REGISTER:
                     guid = payload[0:16].decode("utf-8", errors="ignore").strip("\x00 ")
                     name = payload[16:32].decode("utf-8", errors="ignore").strip("\x00 ")
                     ip = addr[0]
+                    with self._clients_lock:
+                        self._client_guids[addr] = guid
                     self._on_log(
                         f"[REG] device_register 수신 guid={guid} name={name} ip={ip}"
                     )

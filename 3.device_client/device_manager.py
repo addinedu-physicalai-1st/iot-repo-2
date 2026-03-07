@@ -161,4 +161,9 @@ class DeviceManager:
         if self._gate_server:
             self._gate_server.send_write_siteid(site_id)
 
+    def send_exit_display(self, line1: str, line2: str) -> None:
+        """출구 차단기(esp32_board1_2, DEV-GATE-2) LCD 2줄 출력 명령."""
+        if self._gate_server:
+            self._gate_server.send_display(line1, line2)
+
 
