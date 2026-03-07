@@ -71,9 +71,11 @@ bool sensor1_ok = false;
 bool sensor2_ok = false;
 unsigned long lastKeepAliveTime = 0;
 unsigned long lastDetectionTime = 0;
+unsigned long lastReconnectAttempt = 0;
 const unsigned long DETECTION_DELAY = 1000;
 const unsigned long PING_INTERVAL_MS = 5000;
 const unsigned long PONG_TIMEOUT_MS = 5000;
+const unsigned long RECONNECT_INTERVAL_MS = 3000;
 
 #define I2C_SDA1 32
 #define I2C_SCL1 14
@@ -259,15 +261,19 @@ void setup() {
 
 void loop() {
     if (!client.connected()) {
-        client.stop();
-        deviceListSent = false;
-        if (client.connect(serverIP, serverPort)) {
-            lastKeepAliveTime = millis();
-            Serial.println("Reconnected to Server.");
-        } else {
-            delay(5000);
-            return;
+        if (millis() - lastReconnectAttempt >= RECONNECT_INTERVAL_MS) {
+            lastReconnectAttempt = millis();
+            deviceListSent = false;
+            client.stop();
+            Serial.println("Attempting to connect to Server...");
+            if (client.connect(serverIP, serverPort)) {
+                lastKeepAliveTime = millis();
+                Serial.println("Reconnected to Server.");
+                sendDeviceRegister();
+            }
         }
+        delay(150);
+        return;
     }
 
     if (client.connected() && !deviceListSent) {
