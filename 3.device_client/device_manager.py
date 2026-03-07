@@ -23,7 +23,7 @@ class DeviceManager:
         self._gate_server: Esp32GateServer | None = None
         self._gate_logs: list[str] = []
         self._gate_devices: list[dict] = []
-        self._gate_connected: bool = False
+        self._gate_connected_ips: set[str] = set()  # 연결된 보드 IP 목록
         # parking_slots, device 등록 정보 등을 위한 내부 상태
         self._parking_state: dict[str, bool] = {}
 
@@ -59,6 +59,11 @@ class DeviceManager:
         if self._gate_server is not None:
             self._gate_server.stop()
             self._gate_server = None
+        try:
+            self._tx.set_gate_connected(False)
+            self._tx.set_street_parking_connected(False)
+        except Exception:
+            pass
 
     # ───────── ESP32 게이트 관련 헬퍼 (UI에서 사용) ─────────
     def _append_gate_log(self, msg: str) -> None:
@@ -70,30 +75,18 @@ class DeviceManager:
     def _set_gate_devices(self, devices: list[dict]) -> None:
         self._gate_devices = devices
 
-    def _on_gate_state_change(self, connected: bool) -> None:
-        # 중복 호출 방지
-        if self._gate_connected == connected:
-            return
-        self._gate_connected = connected
-        # 서버(FastAPI)에 gate_controller / street_parking_controller 장비 연결 상태 반영
+    def _on_gate_state_change(self, ip: str, connected: bool) -> None:
+        """ESP32 보드 연결/해제 시 해당 IP 의 gate_controller / street_parking_controller 상태 반영."""
+        if connected:
+            self._gate_connected_ips.add(ip)
+        else:
+            self._gate_connected_ips.discard(ip)
         try:
-            ip = None
-            if self._gate_server is not None:
-                # 최근 연결된 ESP32 보드의 IP
-                ip = getattr(self._gate_server, "_current_ip", None)
-
-            if ip:
-                # 특정 IP 와 매칭되는 장비만 연결 상태 반영
-                self._tx.set_gate_connected_by_ip(ip, connected)
-                self._tx.set_street_parking_connected_by_ip(ip, connected)
-            else:
-                # IP 정보를 얻지 못한 경우, 타입 전체에 대해 fallback 처리
-                self._tx.set_gate_connected(connected)
-                self._tx.set_street_parking_connected(connected)
+            self._tx.set_gate_connected_by_ip(ip, connected)
+            self._tx.set_street_parking_connected_by_ip(ip, connected)
         except Exception:
-            # 서버 반영 실패 시에도 로컬 로그는 남긴다.
             state = "연결" if connected else "해제"
-            self._append_gate_log(f"[GATE] 서버 반영 실패 (상태={state})")
+            self._append_gate_log(f"[GATE] 서버 반영 실패 ip={ip} 상태={state}")
 
     # ───────── 장비 등록(DEVICE_GUID 기반 IP 갱신) ─────────
     def _on_device_register(self, device_guid: str, device_name: str, ip: str) -> None:
