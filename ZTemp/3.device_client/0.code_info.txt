@@ -1,0 +1,20 @@
+3.device_client 는 장치 디바이스와 통신 방식으로 .env 파일의 정보로
+
+==> 3.device_client <-> 1.server 간 통신하는 FastApi 포트
+
+# device_client <-> esp32, esp32-cam-server 통신 포트 설정
+# REST API 포트 설정
+==> DEVICE_RESTAPI_PORT = 7070; #esp32, esp32-cam-server 통신 포트 -> 3.device_client 프로그램 RestApi 통신 포트
+# TCP SOCKET 포트 설정
+==> DEVICE_RESTAPI_PORT = 8080; #esp32, esp32-cam-server 통신 포트 -> 3.device_client 연결하는 포트 소켓 통신
+# LPR 카메라 서버 설정
+==> LPR_CAMERA_SERVER_UDP_PORT=7072 포트 
+
+==> LPR_CAMERA_SERVER_UDP_PORT=7072 포트 를 바이 패스 하는 통신포트 2.client_device 가 받을 포트
+
+그리고 device_client -> esp32-cam-server 통신하는 Restapi 서버가 존재 devices -> port_info 정보(포트번호) device_type 이 server 일 경우.
+
+그리고 device_client -> 시리얼 장비별 통신하는 스레드 
+
+이렇게 device_client 프로그램은 여러개의 제어가 필요한 사항
+
