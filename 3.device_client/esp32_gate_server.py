@@ -64,7 +64,7 @@ class Esp32GateServer(threading.Thread):
         port: int = 8080,
         on_log: Optional[Callable[[str], None]] = None,
         on_device_list: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
-        on_state_change: Optional[Callable[[str, bool], None]] = None,
+        on_state_change: Optional[Callable[[str, bool, Optional[str]], None]] = None,
         on_register: Optional[Callable[[str, str, str], None]] = None,
         on_parking_event: Optional[Callable[[str, bool], None]] = None,
     ) -> None:
@@ -73,7 +73,7 @@ class Esp32GateServer(threading.Thread):
         self._port = port
         self._on_log = on_log or (lambda msg: None)
         self._on_device_list = on_device_list or (lambda lst: None)
-        self._on_state_change = on_state_change or (lambda ip, connected: None)
+        self._on_state_change = on_state_change or (lambda ip, connected, guid=None: None)
         # device_guid, device_name, ip 를 전달하는 콜백
         self._on_register = on_register or (lambda guid, name, ip: None)
         # 노상 주차면 이벤트(SPOT_1~4 OCCUPIED/EMPTY)를 서버/DB 동기화용으로 전달
@@ -156,11 +156,12 @@ class Esp32GateServer(threading.Thread):
             self._clients[addr] = conn
             self._current_ip = addr[0]
         self._on_log(f"[GATE] ESP32 보드 연결됨 ({addr[0]}:{addr[1]})")
-        self._on_state_change(addr[0], True)
+        self._on_state_change(addr[0], True, None)
         try:
             self._handle_client(conn, addr)
         finally:
             with self._clients_lock:
+                guid = self._client_guids.get(addr)
                 self._clients.pop(addr, None)
                 self._client_guids.pop(addr, None)
                 self._current_ip = next(iter(self._clients))[0] if self._clients else None
@@ -169,7 +170,7 @@ class Esp32GateServer(threading.Thread):
             except Exception:
                 pass
             self._on_log(f"[GATE] ESP32 보드 연결 종료 ({addr[0]}:{addr[1]})")
-            self._on_state_change(addr[0], False)
+            self._on_state_change(addr[0], False, guid)
 
     def run(self) -> None:  # type: ignore[override]
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

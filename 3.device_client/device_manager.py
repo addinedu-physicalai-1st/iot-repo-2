@@ -75,18 +75,21 @@ class DeviceManager:
     def _set_gate_devices(self, devices: list[dict]) -> None:
         self._gate_devices = devices
 
-    def _on_gate_state_change(self, ip: str, connected: bool) -> None:
-        """ESP32 보드 연결/해제 시 해당 IP 의 gate_controller / street_parking_controller 상태 반영."""
+    def _on_gate_state_change(self, ip: str, connected: bool, guid: str | None = None) -> None:
+        """ESP32 보드 연결/해제 시 GUID 기준으로 gate_controller 연결 상태 반영 (1/2 혼동 방지)."""
         if connected:
             self._gate_connected_ips.add(ip)
         else:
             self._gate_connected_ips.discard(ip)
         try:
-            self._tx.set_gate_connected_by_ip(ip, connected)
+            if guid:
+                self._tx.set_gate_connected_by_guid(guid, connected)
+            elif not connected:
+                self._tx.set_gate_connected_by_ip(ip, False)
             self._tx.set_street_parking_connected_by_ip(ip, connected)
         except Exception:
             state = "연결" if connected else "해제"
-            self._append_gate_log(f"[GATE] 서버 반영 실패 ip={ip} 상태={state}")
+            self._append_gate_log(f"[GATE] 서버 반영 실패 ip={ip} guid={guid} 상태={state}")
 
     # ───────── 장비 등록(DEVICE_GUID 기반 IP 갱신) ─────────
     def _on_device_register(self, device_guid: str, device_name: str, ip: str) -> None:
@@ -101,6 +104,7 @@ class DeviceManager:
         )
         try:
             self._tx.update_device_ip_by_guid(device_guid, ip, device_name=device_name)
+            self._tx.set_gate_connected_by_guid(device_guid, True)
             self._append_gate_log(
                 f"[REG] DB ip_address 갱신 완료 guid={device_guid} → {ip}"
             )
