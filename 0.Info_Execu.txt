@@ -22,4 +22,9 @@
    cd 3.device_client    source .venv/bin/activate    python main.py
 
 * 포트 충돌도 없고, 두 PyQt 프로그램이 각각 독립된 프로세스로 떠서
-  하나는 “전체 주차 관제 대시보드”, 다른 하나는 “장비 상태/카메라/슬롯 보고용 대시보드”로 동시에 테스트 가능합니다.
+  하나는 "전체 주차 관제 대시보드", 다른 하나는 "장비 상태/카메라/슬롯 보고용 대시보드"로 동시에 테스트 가능합니다.
+
+--- 입출구 차단기 컨트롤러 GUID / Name (DB·펌웨어 일치) ---
+  컨트롤러_1 (입구): device_guid = DEV-GATE-1, name = 입출구 차단기 컨트롤러_1  (4.arduino/esp32_board1/esp32_board1_1.ino)
+  컨트롤러_2 (출구): device_guid = DEV-GATE-2, name = 입출구 차단기 컨트롤러_2  (4.arduino/esp32_board1/esp32_board1_2.ino)
+  DB: db/init_manual.sql devices 테이블 동일 GUID/name 사용. 연결 상태는 등록 패킷(GUID) 기준으로만 표시.

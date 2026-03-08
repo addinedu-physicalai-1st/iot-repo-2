@@ -153,6 +153,35 @@ class TransmissionManager:
                 devices=devices,
             )
 
+    def set_gate_connected_by_guid(self, device_guid: str, connected: bool) -> None:
+        """
+        gate_controller 타입 중 device_guid 가 일치하는 장비만 is_connected 업데이트.
+        등록 패킷(TYPE_DEV_REGISTER) 수신 시 GUID 기준으로 연결 표시해, 1/2 혼동 방지.
+        """
+        if not (device_guid or "").strip():
+            return
+        guid_stripped = device_guid.strip()
+        devices: List[Dict[str, Any]] = self._api.list_devices()
+        managed = self._managed_device_ids()
+        changed = False
+        for d in devices:
+            if (d.get("type") or "").lower() != "gate_controller":
+                continue
+            if (d.get("device_guid") or "").strip() != guid_stripped:
+                continue
+            if managed is not None and d.get("id") not in managed:
+                continue
+            if bool(d.get("is_connected")) != connected:
+                self._api.update_device_is_connected(d, connected)
+                d["is_connected"] = connected
+                changed = True
+            break
+        if changed:
+            self._info.update_from_server(
+                health=self._info.server_health,
+                devices=devices,
+            )
+
     def set_street_parking_connected(self, connected: bool) -> None:
         """
         street_parking_controller 타입(esp32_board2) 장비의 is_connected 플래그를
