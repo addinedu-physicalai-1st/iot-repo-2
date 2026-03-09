@@ -8,6 +8,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
+import cv2
 
 from api_client import DeviceApiClient
 from esp32_receiver import Esp32UdpReceiver
@@ -442,6 +443,8 @@ class TransmissionManager:
         try:
             if self._lpr_exit_frame_queue.full():
                 self._lpr_exit_frame_queue.get_nowait()
+            if img is not None:
+                img = cv2.flip(img, 1)
             self._lpr_exit_frame_queue.put((fno, img))
         except Exception:
             pass
