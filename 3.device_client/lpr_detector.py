@@ -73,12 +73,14 @@ class LprRecognitionWorker(QObject):
         plate_conf_threshold: float = 0.25,
         stability_threshold: int = 5,
         cooldown_seconds: float = 5.0,
+        mirror_flip: bool = True,
     ) -> None:
         super().__init__()
         self._model_path = model_path
         self._plate_conf = plate_conf_threshold
         self._stability_threshold = stability_threshold
         self._cooldown = cooldown_seconds
+        self._mirror_flip = mirror_flip
         self._pending_frame: Optional[Any] = None
         self._lock = threading.Lock()
         self._running = True
@@ -142,11 +144,12 @@ class LprRecognitionWorker(QObject):
                 time.sleep(0.02)
                 continue
 
-            try:
-                # ESP32 캠 거울 보정
-                frame = cv2.flip(frame, 1)
-            except Exception:
-                continue
+            if self._mirror_flip:
+                try:
+                    # ESP32 캠 거울 보정
+                    frame = cv2.flip(frame, 1)
+                except Exception:
+                    continue
 
             h, w = frame.shape[:2]
             current_time = time.time()

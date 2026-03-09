@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Optional
-
 import cv2
 import numpy as np
 from PyQt6.QtCore import QTimer, Qt, QThread
@@ -66,6 +65,7 @@ class LprExitTestDialog(QDialog):
             plate_conf_threshold=0.12,
             stability_threshold=1,
             cooldown_seconds=3.0,
+            mirror_flip=False,
         )
         self._lpr_worker.result_ready.connect(self._on_lpr_result)
         self._lpr_thread = QThread()
@@ -82,6 +82,7 @@ class LprExitTestDialog(QDialog):
         self._timer.start()
 
         self.setLayout(layout)
+        self._tx.set_lpr_ocr_ui_active(is_exit=True, active=True)
 
     def _on_lpr_result(self, line: str) -> None:
         self.result_edit.append(line)
@@ -94,9 +95,9 @@ class LprExitTestDialog(QDialog):
         if frame is not None:
             fno, img = frame
             if img is not None:
-                self._last_frame = img
                 # 출구 LPR 영상 보정: 좌우 반전 (번호판 글자 정상 방향)
                 img = cv2.flip(img, 1)
+                self._last_frame = img
                 img = np.ascontiguousarray(img)
                 h, w, ch = img.shape
                 bytes_per_line = ch * w
@@ -115,7 +116,12 @@ class LprExitTestDialog(QDialog):
                 self.video_label.setText("")
 
         self._refresh_count += 1
-        if self._last_frame is not None and self._lpr_worker.is_available() and (self._refresh_count % 5 == 0):
+        if (
+            self._last_frame is not None
+            and self._lpr_worker.is_available()
+            and (self._refresh_count % 5 == 0)
+            and self._tx.should_run_lpr_ocr(is_exit=True)
+        ):
             self._lpr_worker.submit_frame(self._last_frame.copy())
 
         has_frame = self._tx.has_recent_lpr_exit_frame(timeout_sec=5.0)
@@ -123,6 +129,7 @@ class LprExitTestDialog(QDialog):
         self.label_status.setText(f"상태: {status}")
 
     def closeEvent(self, event) -> None:
+        self._tx.set_lpr_ocr_ui_active(is_exit=True, active=False)
         if self._lpr_worker.is_available():
             self._lpr_worker.stop()
             self._lpr_thread.quit()

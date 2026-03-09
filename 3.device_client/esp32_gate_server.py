@@ -68,6 +68,7 @@ class Esp32GateServer(threading.Thread):
         on_register: Optional[Callable[[str, str, str], None]] = None,
         on_parking_event: Optional[Callable[[str, bool], None]] = None,
         on_gate_motor_event: Optional[Callable[[str, str, str], None]] = None,
+        on_gate_event: Optional[Callable[[int, str, str], None]] = None,
     ) -> None:
         super().__init__(daemon=True)
         self._host = host
@@ -81,6 +82,8 @@ class Esp32GateServer(threading.Thread):
         self._on_parking_event = on_parking_event or (lambda spot, occ: None)
         # 게이트 모터 이벤트(OPEN/CLOSED) 상태 전달
         self._on_gate_motor_event = on_gate_motor_event or (lambda state, src, detail: None)
+        # 원본 게이트 이벤트(ev/src/ext) 전달 (APDS 감지 플래그 제어용)
+        self._on_gate_event = on_gate_event or (lambda ev, src, ext: None)
 
         self._clients: Dict[tuple, socket.socket] = {}  # (ip, port) -> conn
         self._client_guids: Dict[tuple, str] = {}      # addr -> device_guid (DEV-GATE-1, DEV-GATE-2 등)
@@ -306,6 +309,7 @@ class Esp32GateServer(threading.Thread):
                     ev = payload[0]
                     src = payload[1:17].decode("utf-8", errors="ignore").strip("\x00 ")
                     ext = payload[17:32].decode("utf-8", errors="ignore").strip("\x00 ")
+                    self._on_gate_event(ev, src, ext)
 
                     if ev == 99:
                         line = f"[ERROR] {src} 초기화 실패 ({ext})"

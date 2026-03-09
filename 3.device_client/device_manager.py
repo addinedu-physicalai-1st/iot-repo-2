@@ -50,6 +50,7 @@ class DeviceManager:
                 on_register=self._on_device_register,
                 on_parking_event=self._on_parking_event,
                 on_gate_motor_event=self._on_gate_motor_event,
+                on_gate_event=self._on_gate_event,
             )
             self._gate_server.start()
 
@@ -169,6 +170,14 @@ class DeviceManager:
             "detail": detail,
             "updated_at": time.time(),
         }
+
+    def _on_gate_event(self, ev: int, src: str, ext: str) -> None:
+        """게이트 이벤트를 받아 입/출구 APDS 감지 기반 OCR 플래그를 갱신한다."""
+        if ev in (1, 2):  # EV_ENTRY / EV_EXIT
+            # 테스트 단계에서는 APDS 감지가 어느 쪽에서 오더라도
+            # 입구/출구 OCR 모두 실행 가능하도록 플래그를 동시에 갱신한다.
+            self._tx.mark_lpr_apds_detected(is_exit=False)
+            self._tx.mark_lpr_apds_detected(is_exit=True)
 
     def get_gate_motor_status(self) -> dict[str, object]:
         return dict(self._gate_motor_status)
