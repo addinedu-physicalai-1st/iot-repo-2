@@ -148,22 +148,32 @@ void sendRFID(uint8_t mode, const char* uid, const char* siteid) {
 
 // 서버 명령(TYPE_CMD_OPEN) 수신 시에만 호출. 입구/출구/RFID 감지 시에는 호출하지 않음.
 void openGate(const char* source) {
-    if (!isGateOpen) {
-        isGateOpen = true;
-        sendEvent(EV_GATE_OPEN, source, "");
-        Serial.println("ACTION: GATE_OPEN BY " + String(source));
-        myServo.write(90);
+    if (isGateOpen) {
+        sendEvent(EV_GATE_OPEN, source, "ALREADY_OPEN");
+        Serial.println("ACTION: GATE_OPEN SKIP (already open) BY " + String(source));
+        return;
     }
+
+    myServo.write(90);
+    delay(200);
+    isGateOpen = true;
+    sendEvent(EV_GATE_OPEN, source, "ACK_OK");
+    Serial.println("ACTION: GATE_OPEN BY " + String(source));
 }
 
 // 서버 명령(TYPE_CMD_CLOSE) 수신 시에만 호출.
 void closeGate(const char* source) {
-    if (isGateOpen) {
-        myServo.write(0);
-        isGateOpen = false;
-        sendEvent(EV_GATE_CLOSED, source, "");
-        Serial.println("ACTION: GATE_CLOSED BY " + String(source));
+    if (!isGateOpen) {
+        sendEvent(EV_GATE_CLOSED, source, "ALREADY_CLOSED");
+        Serial.println("ACTION: GATE_CLOSE SKIP (already closed) BY " + String(source));
+        return;
     }
+
+    myServo.write(0);
+    delay(200);
+    isGateOpen = false;
+    sendEvent(EV_GATE_CLOSED, source, "ACK_OK");
+    Serial.println("ACTION: GATE_CLOSED BY " + String(source));
 }
 
 /*

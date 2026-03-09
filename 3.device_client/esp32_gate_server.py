@@ -67,6 +67,7 @@ class Esp32GateServer(threading.Thread):
         on_state_change: Optional[Callable[[str, bool, Optional[str]], None]] = None,
         on_register: Optional[Callable[[str, str, str], None]] = None,
         on_parking_event: Optional[Callable[[str, bool], None]] = None,
+        on_gate_motor_event: Optional[Callable[[str, str, str], None]] = None,
     ) -> None:
         super().__init__(daemon=True)
         self._host = host
@@ -78,12 +79,22 @@ class Esp32GateServer(threading.Thread):
         self._on_register = on_register or (lambda guid, name, ip: None)
         # 노상 주차면 이벤트(SPOT_1~4 OCCUPIED/EMPTY)를 서버/DB 동기화용으로 전달
         self._on_parking_event = on_parking_event or (lambda spot, occ: None)
+        # 게이트 모터 이벤트(OPEN/CLOSED) 상태 전달
+        self._on_gate_motor_event = on_gate_motor_event or (lambda state, src, detail: None)
 
         self._clients: Dict[tuple, socket.socket] = {}  # (ip, port) -> conn
         self._client_guids: Dict[tuple, str] = {}      # addr -> device_guid (DEV-GATE-1, DEV-GATE-2 등)
         self._clients_lock = threading.Lock()
         self._stop_flag = threading.Event()
         self._current_ip: Optional[str] = None  # 마지막 연결 IP (호환용)
+        self._gate_state_lock = threading.Lock()
+        self._gate_state: str = "UNKNOWN"
+        self._gate_state_source: str = ""
+        self._gate_state_detail: str = ""
+        self._gate_state_updated_at: float = 0.0
+        self._pending_cmd: Optional[str] = None  # "OPEN" | "CLOSE"
+        self._pending_result: Optional[Dict[str, Any]] = None
+        self._pending_event = threading.Event()
 
     def _send_to_all(self, pkt_type: int, payload: bytes) -> None:
         """연결된 모든 클라이언트에 패킷 전송."""
@@ -99,25 +110,76 @@ class Esp32GateServer(threading.Thread):
                 self._clients.pop(a, None)
 
     # ───────── 외부 호출용 API (명령 전송) ─────────
-    def send_open_gate(self) -> None:
+    def _send_gate_command(
+        self,
+        pkt_type: int,
+        cmd_name: str,
+        wait_result_sec: float,
+    ) -> Dict[str, Any]:
         with self._clients_lock:
             if not self._clients:
-                return
+                return {
+                    "ok": False,
+                    "command": cmd_name,
+                    "state": self._gate_state,
+                    "detail": "NO_CLIENT",
+                    "message": "게이트 보드 미연결",
+                }
+        with self._gate_state_lock:
+            self._pending_cmd = cmd_name
+            self._pending_result = None
+            self._pending_event.clear()
         try:
-            self._send_to_all(TYPE_CMD_OPEN, b"\x00" * 32)
-            self._on_log("[CMD] 게이트 열기 전송")
+            self._send_to_all(pkt_type, b"\x00" * 32)
+            self._on_log(f"[CMD] 게이트 {cmd_name} 전송")
         except OSError:
-            self._on_log("[CMD] 게이트 열기 전송 실패 (소켓 에러)")
+            with self._gate_state_lock:
+                self._pending_cmd = None
+            self._on_log(f"[CMD] 게이트 {cmd_name} 전송 실패 (소켓 에러)")
+            return {
+                "ok": False,
+                "command": cmd_name,
+                "state": self._gate_state,
+                "detail": "SEND_ERROR",
+                "message": "명령 전송 실패",
+            }
 
-    def send_close_gate(self) -> None:
-        with self._clients_lock:
-            if not self._clients:
-                return
-        try:
-            self._send_to_all(TYPE_CMD_CLOSE, b"\x00" * 32)
-            self._on_log("[CMD] 게이트 닫기 전송")
-        except OSError:
-            self._on_log("[CMD] 게이트 닫기 전송 실패 (소켓 에러)")
+        if not self._pending_event.wait(wait_result_sec):
+            with self._gate_state_lock:
+                self._pending_cmd = None
+            return {
+                "ok": False,
+                "command": cmd_name,
+                "state": self._gate_state,
+                "detail": "TIMEOUT",
+                "message": f"응답 대기 타임아웃({wait_result_sec:.1f}s)",
+            }
+
+        with self._gate_state_lock:
+            if self._pending_result is None:
+                return {
+                    "ok": False,
+                    "command": cmd_name,
+                    "state": self._gate_state,
+                    "detail": "EMPTY_RESULT",
+                    "message": "응답 수신 실패",
+                }
+            return dict(self._pending_result)
+
+    def send_open_gate(self, wait_result_sec: float = 3.0) -> Dict[str, Any]:
+        return self._send_gate_command(TYPE_CMD_OPEN, "OPEN", wait_result_sec)
+
+    def send_close_gate(self, wait_result_sec: float = 3.0) -> Dict[str, Any]:
+        return self._send_gate_command(TYPE_CMD_CLOSE, "CLOSE", wait_result_sec)
+
+    def get_gate_motor_status(self) -> Dict[str, Any]:
+        with self._gate_state_lock:
+            return {
+                "state": self._gate_state,
+                "source": self._gate_state_source,
+                "detail": self._gate_state_detail,
+                "updated_at": self._gate_state_updated_at,
+            }
 
     def send_write_siteid(self, site_id: str) -> None:
         with self._clients_lock:
@@ -251,6 +313,27 @@ class Esp32GateServer(threading.Thread):
                         name = EV_NAMES.get(ev, f"EV_{ev}")
                         line = f"[EVENT] {name} | {src}" + (f" | {ext}" if ext else "")
                     self._on_log(line)
+
+                    if ev in (4, 5):
+                        motor_state = "OPEN" if ev == 4 else "CLOSED"
+                        with self._gate_state_lock:
+                            self._gate_state = motor_state
+                            self._gate_state_source = src
+                            self._gate_state_detail = ext
+                            self._gate_state_updated_at = time.time()
+                            expected_ev = 4 if self._pending_cmd == "OPEN" else 5 if self._pending_cmd == "CLOSE" else None
+                            if expected_ev == ev:
+                                self._pending_result = {
+                                    "ok": True,
+                                    "command": self._pending_cmd,
+                                    "state": motor_state,
+                                    "source": src,
+                                    "detail": ext or "ACK_OK",
+                                    "message": "명령 수행 완료",
+                                }
+                                self._pending_cmd = None
+                                self._pending_event.set()
+                        self._on_gate_motor_event(motor_state, src, ext)
 
                     if src.startswith("SPOT_") and ext in ("OCCUPIED", "EMPTY"):
                         is_occupied = ext == "OCCUPIED"
