@@ -200,8 +200,8 @@ class DashboardWindow(QMainWindow):
         label_sensor = QLabel("입·출차 감지 센서:")
         sensor_row.addWidget(label_sensor)
 
-        self.btn_sensor_left = QPushButton("Left (입차)")
-        self.btn_sensor_right = QPushButton("Right (출차)")
+        self.btn_sensor_left = QPushButton("입차")
+        self.btn_sensor_right = QPushButton("출차")
 
         # 기본 스타일: 연결 안됨(회색)
         self._set_sensor_button_state(self.btn_sensor_left, "연결 안됨")
@@ -303,7 +303,7 @@ class DashboardWindow(QMainWindow):
 
         self.update_summary(dashboard)
         self.update_devices_table(devices)
-        self.update_device_status_summary(devices)
+        self.update_device_status_summary(devices, dashboard)
         self.update_events(dashboard.get("recent_events", []))
         self.statusBar().showMessage("데이터 갱신 완료", 2000)
 
@@ -426,7 +426,11 @@ class DashboardWindow(QMainWindow):
                 status_item.setBackground(Qt.GlobalColor.darkRed)
             self.table_devices.setItem(row, 6, status_item)
 
-    def update_device_status_summary(self, devices: List[Dict[str, Any]]) -> None:
+    def update_device_status_summary(
+        self,
+        devices: List[Dict[str, Any]],
+        dashboard: Dict[str, Any],
+    ) -> None:
         """
         devices 목록을 바탕으로 게이트 컨트롤러(esp32_board1) 등의
         연결 상태를 상단 요약 UI(차단기 상태/센서 버튼)에 반영한다.
@@ -447,6 +451,26 @@ class DashboardWindow(QMainWindow):
             self.combo_gate_status.setCurrentIndex(0)  # 연결 안됨
 
         self._update_gate_combo_enabled()
+
+        # 입/출차 감지 센서 버튼 상태 (주차타워 T1/T2 와 무관한 별도 상태)
+        entry_conn = bool(dashboard.get("entry_sensor_connected", False))
+        entry_det = bool(dashboard.get("entry_sensor_detected", False))
+        exit_conn = bool(dashboard.get("exit_sensor_connected", False))
+        exit_det = bool(dashboard.get("exit_sensor_detected", False))
+
+        if not gate_connected or not entry_conn:
+            self._set_sensor_button_state(self.btn_sensor_left, "연결 안됨")
+        elif entry_det:
+            self._set_sensor_button_state(self.btn_sensor_left, "차량 감지")
+        else:
+            self._set_sensor_button_state(self.btn_sensor_left, "감지 없음")
+
+        if not gate_connected or not exit_conn:
+            self._set_sensor_button_state(self.btn_sensor_right, "연결 안됨")
+        elif exit_det:
+            self._set_sensor_button_state(self.btn_sensor_right, "차량 감지")
+        else:
+            self._set_sensor_button_state(self.btn_sensor_right, "감지 없음")
 
     def update_events(self, events: List[Dict[str, Any]]) -> None:
         if not events:

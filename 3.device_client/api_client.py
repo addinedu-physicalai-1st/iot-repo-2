@@ -38,6 +38,44 @@ class DeviceApiClient:
         else:
             self._client.post(f"/parking/slots/{slot_id}/release")
 
+    def set_slot_sensor_connected(self, slot_name: str, connected: bool) -> None:
+        """슬롯 이름 기준으로 sensor_connected 상태만 반영."""
+        resp = self._client.get("/parking/slots")
+        resp.raise_for_status()
+        slots = resp.json()
+        slot_id = None
+        for s in slots:
+            if s.get("name") == slot_name:
+                slot_id = s.get("id")
+                break
+        if slot_id is None:
+            return
+        self._client.post(
+            f"/parking/slots/{slot_id}/sensor-connected",
+            params={"connected": str(connected).lower()},
+        )
+
+    def set_entry_exit_sensor_state(
+        self,
+        *,
+        entry_sensor_connected: bool | None = None,
+        exit_sensor_connected: bool | None = None,
+        entry_sensor_detected: bool | None = None,
+        exit_sensor_detected: bool | None = None,
+    ) -> None:
+        params: dict[str, str] = {}
+        if entry_sensor_connected is not None:
+            params["entry_sensor_connected"] = str(entry_sensor_connected).lower()
+        if exit_sensor_connected is not None:
+            params["exit_sensor_connected"] = str(exit_sensor_connected).lower()
+        if entry_sensor_detected is not None:
+            params["entry_sensor_detected"] = str(entry_sensor_detected).lower()
+        if exit_sensor_detected is not None:
+            params["exit_sensor_detected"] = str(exit_sensor_detected).lower()
+        if not params:
+            return
+        self._client.post("/parking/entry-exit-sensors", params=params)
+
     def log_event(self, event_type: str, message: str = "") -> None:
         # 서버에 EventLog 전용 엔드포인트를 아직 안 만들었으므로
         # TODO: 필요 시 /events API 추가

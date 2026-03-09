@@ -60,6 +60,7 @@ class DeviceManager:
         try:
             self._tx.set_gate_connected(False)
             self._tx.set_street_parking_connected(False)
+            self._tx.set_tower_slots_inactive()
         except Exception:
             # 초기화 실패는 치명적이지 않으므로 로그만 남기고 무시
             self._append_gate_log("[GATE] 초기 연결 상태 리셋 실패 (DB)")
@@ -97,6 +98,7 @@ class DeviceManager:
             elif not connected:
                 self._tx.set_gate_connected_by_ip(ip, False)
             self._tx.set_street_parking_connected_by_ip(ip, connected)
+            self._tx.set_entry_exit_sensor_connected(connected)
         except Exception:
             state = "연결" if connected else "해제"
             self._append_gate_log(f"[GATE] 서버 반영 실패 ip={ip} guid={guid} 상태={state}")
@@ -178,6 +180,7 @@ class DeviceManager:
             # 입구/출구 OCR 모두 실행 가능하도록 플래그를 동시에 갱신한다.
             self._tx.mark_lpr_apds_detected(is_exit=False)
             self._tx.mark_lpr_apds_detected(is_exit=True)
+            self._tx.pulse_entry_exit_sensor_detected(is_exit=(ev == 2))
 
     def get_gate_motor_status(self) -> dict[str, object]:
         return dict(self._gate_motor_status)
