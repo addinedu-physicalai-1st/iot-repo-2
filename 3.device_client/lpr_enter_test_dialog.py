@@ -66,6 +66,7 @@ class LprEnterTestDialog(QDialog):
             plate_conf_threshold=0.12,
             stability_threshold=1,
             cooldown_seconds=3.0,
+            mirror_flip=False,
         )
         self._lpr_worker.result_ready.connect(self._on_lpr_result)
         self._lpr_thread = QThread()
@@ -82,6 +83,7 @@ class LprEnterTestDialog(QDialog):
         self._timer.start()
 
         self.setLayout(layout)
+        self._tx.set_lpr_ocr_ui_active(is_exit=False, active=True)
 
     def _on_lpr_result(self, line: str) -> None:
         self.result_edit.append(line)
@@ -95,9 +97,10 @@ class LprEnterTestDialog(QDialog):
         if frame is not None:
             fno, img = frame
             if img is not None:
-                self._last_frame = img
                 # 입구 LPR 영상 보정: 상하 반전
                 img = cv2.flip(img, 0)
+                # OCR에도 화면과 동일한 보정본을 사용
+                self._last_frame = img
                 img = np.ascontiguousarray(img)
                 h, w, ch = img.shape
                 bytes_per_line = ch * w
@@ -117,7 +120,12 @@ class LprEnterTestDialog(QDialog):
 
         # 영상과 별도로, 주기적으로만 LPR에 프레임 전달 (실시간 영상 지연 없음)
         self._refresh_count += 1
-        if self._last_frame is not None and self._lpr_worker.is_available() and (self._refresh_count % 5 == 0):
+        if (
+            self._last_frame is not None
+            and self._lpr_worker.is_available()
+            and (self._refresh_count % 5 == 0)
+            and self._tx.should_run_lpr_ocr(is_exit=False)
+        ):
             self._lpr_worker.submit_frame(self._last_frame.copy())
 
         has_frame = self._tx.has_recent_lpr_frame(timeout_sec=5.0)
@@ -125,6 +133,7 @@ class LprEnterTestDialog(QDialog):
         self.label_status.setText(f"상태: {status}")
 
     def closeEvent(self, event) -> None:
+        self._tx.set_lpr_ocr_ui_active(is_exit=False, active=False)
         if self._lpr_worker.is_available():
             self._lpr_worker.stop()
             self._lpr_thread.quit()

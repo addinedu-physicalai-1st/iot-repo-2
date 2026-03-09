@@ -41,6 +41,13 @@ class TransmissionManager:
         self._lpr_exit_frame_queue: Queue = Queue(maxsize=5)
         self._lpr_exit_last_frame_ts: float = 0.0
         self._lpr_exit_udp_receiver: Optional[Esp32UdpReceiver] = None
+        # OCR 실행 제어 플래그
+        self._lpr_ocr_entry_ui_active: bool = False
+        self._lpr_ocr_exit_ui_active: bool = False
+        self._lpr_ocr_entry_apds_until: float = 0.0
+        self._lpr_ocr_exit_apds_until: float = 0.0
+        self._lpr_ocr_apds_hold_sec: float = 3.0
+        self._lpr_ocr_test_bootstrap_sec: float = 15.0
 
         # LPR 용 REST 서버 (등록/config/command) — 연결 상태는 UDP 기준으로만 갱신
         self._start_lpr_rest_server()
@@ -63,6 +70,42 @@ class TransmissionManager:
         # 예전에 켜져 있던 상태가 DB 에 남아 있어도 실제 상태와 맞출 수 있다.
         self._set_lpr_connected(False, force=True)
         self._set_lpr_exit_connected(False, force=True)
+
+    # ───────── LPR OCR 실행 제어 (UI 활성 + APDS 감지) ─────────
+    def set_lpr_ocr_ui_active(self, is_exit: bool, active: bool) -> None:
+        now = time.time()
+        if is_exit:
+            self._lpr_ocr_exit_ui_active = active
+            # 테스트 UI를 열면 모델 로딩/초기 프레임 동안 OCR이 막히지 않도록
+            # 출구 APDS 허용 윈도우를 한 번 넉넉히 열어 둔다.
+            if active:
+                self._lpr_ocr_exit_apds_until = max(
+                    self._lpr_ocr_exit_apds_until,
+                    now + self._lpr_ocr_test_bootstrap_sec,
+                )
+        else:
+            self._lpr_ocr_entry_ui_active = active
+            # 테스트 UI를 열면 모델 로딩/초기 프레임 동안 OCR이 막히지 않도록
+            # 입구 APDS 허용 윈도우를 한 번 넉넉히 열어 둔다.
+            if active:
+                self._lpr_ocr_entry_apds_until = max(
+                    self._lpr_ocr_entry_apds_until,
+                    now + self._lpr_ocr_test_bootstrap_sec,
+                )
+
+    def mark_lpr_apds_detected(self, is_exit: bool) -> None:
+        """APDS 감지 이벤트를 받으면 짧은 시간 동안 OCR 허용 플래그를 활성화한다."""
+        expire_at = time.time() + self._lpr_ocr_apds_hold_sec
+        if is_exit:
+            self._lpr_ocr_exit_apds_until = expire_at
+        else:
+            self._lpr_ocr_entry_apds_until = expire_at
+
+    def should_run_lpr_ocr(self, is_exit: bool) -> bool:
+        now = time.time()
+        if is_exit:
+            return self._lpr_ocr_exit_ui_active and (now <= self._lpr_ocr_exit_apds_until)
+        return self._lpr_ocr_entry_ui_active and (now <= self._lpr_ocr_entry_apds_until)
 
     # ───────── 서버와의 통신 ─────────
     def get_my_managed_device_ids(self) -> List[int]:
