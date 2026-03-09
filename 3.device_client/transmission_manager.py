@@ -51,6 +51,8 @@ class TransmissionManager:
         self._sensor_detect_hold_sec: float = 1.5
         self._entry_sensor_seq: int = 0
         self._exit_sensor_seq: int = 0
+        self._operation_mode_on: bool = True
+        self._dashboard_free_slots: int = 0
 
         # LPR 용 REST 서버 (등록/config/command) — 연결 상태는 UDP 기준으로만 갱신
         self._start_lpr_rest_server()
@@ -197,7 +199,14 @@ class TransmissionManager:
         """
         health: Dict[str, Any] = self._api.health()
         devices: List[Dict[str, Any]] = self._api.list_devices()
+        dashboard: Dict[str, Any] = self._api.get_dashboard()
+        self._operation_mode_on = bool(dashboard.get("operation_mode_on", True))
+        self._dashboard_free_slots = int(dashboard.get("free_slots", 0))
         self._info.update_from_server(health=health, devices=devices)
+
+    def get_operation_mode_snapshot(self) -> tuple[bool, int]:
+        """(운영상태 ON/OFF, 빈 주차면 수) 반환."""
+        return self._operation_mode_on, self._dashboard_free_slots
 
     def set_tower_slots_inactive(self) -> None:
         """

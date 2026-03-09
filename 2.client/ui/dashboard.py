@@ -29,6 +29,7 @@ class DashboardWindow(QMainWindow):
         self.api = ApiClient()
         self._resident_window: ResidentManagerWindow | None = None
         self._sensor_window: SensorManagerWindow | None = None
+        self._operation_mode_on: bool = True
 
         self.setWindowTitle("스마트 주차장 관리 시스템 - 대시보드")
         self.resize(1200, 700)
@@ -195,6 +196,16 @@ class DashboardWindow(QMainWindow):
         gate_row.addStretch()
         device_status_layout.addLayout(gate_row)
 
+        # 운영 상태 스위치 (ON/OFF)
+        op_row = QHBoxLayout()
+        op_row.addWidget(QLabel("운영 상태:"))
+        self.btn_operation_mode = QPushButton("ON")
+        self.btn_operation_mode.setCheckable(True)
+        self.btn_operation_mode.clicked.connect(self._on_operation_mode_clicked)
+        op_row.addWidget(self.btn_operation_mode)
+        op_row.addStretch()
+        device_status_layout.addLayout(op_row)
+
         # 센서 상태 버튼 (좌: 입차 감지, 우: 출차 감지)
         sensor_row = QHBoxLayout()
         label_sensor = QLabel("입·출차 감지 센서:")
@@ -304,6 +315,7 @@ class DashboardWindow(QMainWindow):
         self.update_summary(dashboard)
         self.update_devices_table(devices)
         self.update_device_status_summary(devices, dashboard)
+        self._apply_operation_mode_ui(bool(dashboard.get("operation_mode_on", True)))
         self.update_events(dashboard.get("recent_events", []))
         self.statusBar().showMessage("데이터 갱신 완료", 2000)
 
@@ -471,6 +483,48 @@ class DashboardWindow(QMainWindow):
             self._set_sensor_button_state(self.btn_sensor_right, "차량 감지")
         else:
             self._set_sensor_button_state(self.btn_sensor_right, "감지 없음")
+
+    def _apply_operation_mode_ui(self, operation_mode_on: bool) -> None:
+        self._operation_mode_on = operation_mode_on
+        self.btn_operation_mode.blockSignals(True)
+        self.btn_operation_mode.setChecked(operation_mode_on)
+        self.btn_operation_mode.setText("ON" if operation_mode_on else "OFF")
+        if operation_mode_on:
+            self.btn_operation_mode.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #2e7d32;
+                    color: #ffffff;
+                    border-radius: 4px;
+                    padding: 4px 10px;
+                }
+                """
+            )
+        else:
+            self.btn_operation_mode.setStyleSheet(
+                """
+                QPushButton {
+                    background-color: #c62828;
+                    color: #ffffff;
+                    border-radius: 4px;
+                    padding: 4px 10px;
+                }
+                """
+            )
+        self.btn_operation_mode.blockSignals(False)
+
+    def _on_operation_mode_clicked(self) -> None:
+        target = self.btn_operation_mode.isChecked()
+        try:
+            data = self.api.set_operation_mode(target)
+            self._apply_operation_mode_ui(bool(data.get("operation_mode_on", target)))
+            self.statusBar().showMessage(
+                f"운영 상태 변경: {'ON' if self._operation_mode_on else 'OFF'}",
+                2000,
+            )
+        except Exception as e:  # noqa: BLE001
+            self.statusBar().showMessage(f"운영 상태 변경 실패: {e}", 3000)
+            self._apply_operation_mode_ui(self._operation_mode_on)
 
     def update_events(self, events: List[Dict[str, Any]]) -> None:
         if not events:

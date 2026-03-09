@@ -122,6 +122,7 @@ class DashboardSummary(BaseModel):
     exit_sensor_connected: bool = False
     entry_sensor_detected: bool = False
     exit_sensor_detected: bool = False
+    operation_mode_on: bool = True
     # 관리 클라이언트에서 슬롯별 센서 상태(디바이스 클라에서 올린 것)를
     # 한 번에 볼 수 있도록 상세 슬롯 목록도 포함
     slots: List[ParkingSlotRead] = []

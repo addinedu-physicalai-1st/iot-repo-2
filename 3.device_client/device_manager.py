@@ -32,6 +32,7 @@ class DeviceManager:
             "detail": "",
             "updated_at": 0.0,
         }
+        self._last_exit_lcd_signature: tuple[bool, int, str] | None = None
         # parking_slots, device 등록 정보 등을 위한 내부 상태
         self._parking_state: dict[str, bool] = {}
 
@@ -209,9 +210,36 @@ class DeviceManager:
         if self._gate_server:
             self._gate_server.send_write_siteid(site_id)
 
-    def send_exit_display(self, line1: str, line2: str) -> None:
+    def send_exit_display(self, line1: str, line2: str) -> bool:
         """출구 차단기(esp32_board1_2, DEV-GATE-2) LCD 2줄 출력 명령."""
         if self._gate_server:
-            self._gate_server.send_display(line1, line2)
+            return self._gate_server.send_display(line1, line2)
+        return False
+
+    def sync_exit_lcd_base(
+        self,
+        operation_mode_on: bool,
+        free_slots: int,
+        message_type: str = "default",
+    ) -> None:
+        """
+        출구 보드 LCD 기본 메시지 동기화.
+        - message_type 으로 향후 입차 상황별 메시지 분기 확장 가능
+        """
+        signature = (operation_mode_on, int(free_slots), message_type)
+        if self._last_exit_lcd_signature == signature:
+            return
+
+        if not operation_mode_on:
+            line1 = "PARKING Closed."
+            line2 = "Sorry."
+        else:
+            # 기본 운영 메시지(요청 사양)
+            line1 = "Welcom PARKING"
+            line2 = f"empty {int(free_slots)}"
+
+        sent = self.send_exit_display(line1[:16], line2[:16])
+        if sent:
+            self._last_exit_lcd_signature = signature
 
 

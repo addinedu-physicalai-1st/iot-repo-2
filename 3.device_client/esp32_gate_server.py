@@ -195,7 +195,7 @@ class Esp32GateServer(threading.Thread):
         except OSError:
             self._on_log("[CMD] 카드 SiteID 쓰기 전송 실패 (소켓 에러)")
 
-    def send_display(self, line1: str, line2: str) -> None:
+    def send_display(self, line1: str, line2: str) -> bool:
         """출구 차단기(DEV-GATE-2) LCD 2줄 출력 명령. 해당 guid 로 등록된 클라이언트에만 전송."""
         line1_b = line1.encode("utf-8", errors="replace")[:16].ljust(16, b"\x00")
         line2_b = line2.encode("utf-8", errors="replace")[:16].ljust(16, b"\x00")
@@ -208,10 +208,12 @@ class Esp32GateServer(threading.Thread):
                 try:
                     conn.sendall(data)
                     self._on_log(f"[CMD] 출구 LCD 전송: '{line1}' / '{line2}'")
+                    return True
                 except OSError:
                     self._on_log("[CMD] 출구 LCD 전송 실패 (소켓 에러)")
-                return
+                    return False
         self._on_log("[CMD] 출구 보드(DEV-GATE-2) 미연결, LCD 전송 스킵")
+        return False
 
     # ───────── 스레드 메인 루프 ─────────
     def _serve_client(self, conn: socket.socket, addr: tuple) -> None:

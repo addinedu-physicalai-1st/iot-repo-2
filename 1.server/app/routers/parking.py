@@ -5,6 +5,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
+from ..config import settings
 from ..db import get_db
 
 
@@ -17,6 +18,7 @@ ENTRY_EXIT_SENSOR_STATE = {
     "entry_sensor_detected": False,
     "exit_sensor_detected": False,
 }
+OPERATION_MODE_ON = settings.operation_mode_on
 
 
 @router.get("/slots", response_model=List[schemas.ParkingSlotRead])
@@ -91,6 +93,18 @@ def set_entry_exit_sensor_state(
     return {"ok": True, **ENTRY_EXIT_SENSOR_STATE}
 
 
+@router.get("/operation-mode")
+def get_operation_mode():
+    return {"operation_mode_on": OPERATION_MODE_ON}
+
+
+@router.post("/operation-mode")
+def set_operation_mode(operation_mode_on: bool):
+    global OPERATION_MODE_ON
+    OPERATION_MODE_ON = operation_mode_on
+    return {"ok": True, "operation_mode_on": OPERATION_MODE_ON}
+
+
 @router.get("/dashboard", response_model=schemas.DashboardSummary)
 def dashboard_summary(db: Session = Depends(get_db)):
     total_slots = db.query(func.count(models.ParkingSlot.id)).scalar() or 0
@@ -124,6 +138,7 @@ def dashboard_summary(db: Session = Depends(get_db)):
         exit_sensor_connected=ENTRY_EXIT_SENSOR_STATE["exit_sensor_connected"],
         entry_sensor_detected=ENTRY_EXIT_SENSOR_STATE["entry_sensor_detected"],
         exit_sensor_detected=ENTRY_EXIT_SENSOR_STATE["exit_sensor_detected"],
+        operation_mode_on=OPERATION_MODE_ON,
         slots=slots,
     )
 
