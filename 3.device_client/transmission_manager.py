@@ -48,6 +48,9 @@ class TransmissionManager:
         self._lpr_ocr_exit_apds_until: float = 0.0
         self._lpr_ocr_apds_hold_sec: float = 3.0
         self._lpr_ocr_test_bootstrap_sec: float = 15.0
+        self._sensor_detect_hold_sec: float = 1.5
+        self._entry_sensor_seq: int = 0
+        self._exit_sensor_seq: int = 0
 
         # LPR 용 REST 서버 (등록/config/command) — 연결 상태는 UDP 기준으로만 갱신
         self._start_lpr_rest_server()
@@ -107,6 +110,58 @@ class TransmissionManager:
             return self._lpr_ocr_exit_ui_active and (now <= self._lpr_ocr_exit_apds_until)
         return self._lpr_ocr_entry_ui_active and (now <= self._lpr_ocr_entry_apds_until)
 
+    # ───────── 입/출차 감지 센서(T1/T2) 상태 반영 ─────────
+    def set_entry_exit_sensor_connected(self, connected: bool) -> None:
+        """게이트 연결 상태에 맞춰 입/출차 감지 센서 연결 상태를 서버에 반영."""
+        self._api.set_entry_exit_sensor_state(
+            entry_sensor_connected=connected,
+            exit_sensor_connected=connected,
+        )
+        if not connected:
+            self._api.set_entry_exit_sensor_state(
+                entry_sensor_detected=False,
+                exit_sensor_detected=False,
+            )
+
+    def pulse_entry_exit_sensor_detected(self, is_exit: bool) -> None:
+        """
+        APDS 감지 이벤트를 짧게 점등(빨강) 후 자동 해제(초록)한다.
+        - is_exit=False: 입차(T1)
+        - is_exit=True:  출차(T2)
+        """
+        if is_exit:
+            self._exit_sensor_seq += 1
+            seq = self._exit_sensor_seq
+        else:
+            self._entry_sensor_seq += 1
+            seq = self._entry_sensor_seq
+
+        if is_exit:
+            self._api.set_entry_exit_sensor_state(
+                exit_sensor_connected=True,
+                exit_sensor_detected=True,
+            )
+        else:
+            self._api.set_entry_exit_sensor_state(
+                entry_sensor_connected=True,
+                entry_sensor_detected=True,
+            )
+
+        def _release_later() -> None:
+            time.sleep(self._sensor_detect_hold_sec)
+            if is_exit:
+                if seq != self._exit_sensor_seq:
+                    return
+            else:
+                if seq != self._entry_sensor_seq:
+                    return
+            if is_exit:
+                self._api.set_entry_exit_sensor_state(exit_sensor_detected=False)
+            else:
+                self._api.set_entry_exit_sensor_state(entry_sensor_detected=False)
+
+        threading.Thread(target=_release_later, daemon=True).start()
+
     # ───────── 서버와의 통신 ─────────
     def get_my_managed_device_ids(self) -> List[int]:
         """
@@ -143,6 +198,15 @@ class TransmissionManager:
         health: Dict[str, Any] = self._api.health()
         devices: List[Dict[str, Any]] = self._api.list_devices()
         self._info.update_from_server(health=health, devices=devices)
+
+    def set_tower_slots_inactive(self) -> None:
+        """
+        주차타워 슬롯(T1~T6)은 입/출차 감지센서와 무관하므로
+        sensor_connected=False / is_occupied=False 로 고정한다.
+        """
+        for slot_name in ("T1", "T2", "T3", "T4", "T5", "T6"):
+            self._api.set_slot_sensor_connected(slot_name, False)
+            self._api.set_slot_occupied(slot_name, False)
 
     # ───────── 디바이스 연결 상태 업데이트 ─────────
     def _managed_device_ids(self) -> Optional[List[int]]:
