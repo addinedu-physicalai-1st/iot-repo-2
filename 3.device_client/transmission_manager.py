@@ -53,6 +53,10 @@ class TransmissionManager:
         self._exit_sensor_seq: int = 0
         self._operation_mode_on: bool = True
         self._dashboard_free_slots: int = 0
+        self._gate_sensor_state: int = 1
+        self._gate_auto_state: int = 0
+        self._entry_sensor_detected: bool = False
+        self._exit_sensor_detected: bool = False
 
         # LPR 용 REST 서버 (등록/config/command) — 연결 상태는 UDP 기준으로만 갱신
         self._start_lpr_rest_server()
@@ -202,11 +206,42 @@ class TransmissionManager:
         dashboard: Dict[str, Any] = self._api.get_dashboard()
         self._operation_mode_on = bool(dashboard.get("operation_mode_on", True))
         self._dashboard_free_slots = int(dashboard.get("free_slots", 0))
+        self._gate_sensor_state = int(dashboard.get("gate_sensor_state", 1))
+        self._gate_auto_state = int(dashboard.get("gate_auto_state", 0))
+        self._entry_sensor_detected = bool(dashboard.get("entry_sensor_detected", False))
+        self._exit_sensor_detected = bool(dashboard.get("exit_sensor_detected", False))
         self._info.update_from_server(health=health, devices=devices)
 
-    def get_operation_mode_snapshot(self) -> tuple[bool, int]:
-        """(운영상태 ON/OFF, 빈 주차면 수) 반환."""
-        return self._operation_mode_on, self._dashboard_free_slots
+    def get_operation_mode_snapshot(self) -> tuple[bool, int, int, int]:
+        """(운영상태 ON/OFF, 빈 주차면 수, 게이트 상태, 자동게이트 상태) 반환."""
+        return (
+            self._operation_mode_on,
+            self._dashboard_free_slots,
+            self._gate_sensor_state,
+            self._gate_auto_state,
+        )
+
+    def get_entry_exit_detection_snapshot(self) -> tuple[bool, bool]:
+        """(입차 감지 여부, 출차 감지 여부) 반환."""
+        return (self._entry_sensor_detected, self._exit_sensor_detected)
+
+    def set_gate_state(
+        self,
+        *,
+        gate_sensor_state: int | None = None,
+        gate_auto_state: int | None = None,
+    ) -> None:
+        data = self._api.set_gate_state(
+            gate_sensor_state=gate_sensor_state,
+            gate_auto_state=gate_auto_state,
+        )
+        if "gate_sensor_state" in data:
+            self._gate_sensor_state = int(data["gate_sensor_state"])
+        if "gate_auto_state" in data:
+            self._gate_auto_state = int(data["gate_auto_state"])
+
+    def set_gate_auto_state(self, gate_auto_state: int) -> None:
+        self.set_gate_state(gate_auto_state=int(gate_auto_state))
 
     def set_tower_slots_inactive(self) -> None:
         """

@@ -84,6 +84,8 @@ CREATE TABLE sensors (
   guid         VARCHAR(32)  NOT NULL,
   name         VARCHAR(50)  NOT NULL,
   sensor_type  VARCHAR(30)  NOT NULL,            -- CAMERA, ENTRY_IR, EXIT_IR, RFID, GATE_SERVO 등
+  sensor_states TINYINT      NOT NULL DEFAULT 0, -- 0:연결안됨 1:닫힘 2:열림 3:자동
+  gate_auto_state TINYINT    NOT NULL DEFAULT 0, -- 자동일 때 실제 상태(0:동작없음 1:열림 2:닫힘)
   is_active    TINYINT(1)   NOT NULL DEFAULT 1,  -- 사용 유무
   created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_by   VARCHAR(50)  NOT NULL,            -- 등록한 사람
@@ -318,29 +320,31 @@ VALUES
 ON DUPLICATE KEY UPDATE updated_at = NOW();
 
 -- 센서 테이블 샘플 데이터 (ESP32 카메라 + IR/RFID/게이트)
-INSERT INTO sensors (guid, name, sensor_type, is_active, created_at, created_by)
+INSERT INTO sensors (guid, name, sensor_type, sensor_states, gate_auto_state, is_active, created_at, created_by)
 VALUES
   -- ESP32 카메라 모듈
-  ('ESP32-CAM-01',    'CamStream_ENTRY',    'CAMERA',     1, NOW(), 'admin'),
-  ('ESP32-CAM-02',    'CamStream_EXIT',     'CAMERA',     1, NOW(), 'admin'),
+  ('ESP32-CAM-01',    'CamStream_ENTRY',    'CAMERA',      0, 0, 1, NOW(), 'admin'),
+  ('ESP32-CAM-02',    'CamStream_EXIT',     'CAMERA',      0, 0, 1, NOW(), 'admin'),
   -- ESP32 보드1: 입구/출구 차량 감지 센서
-  ('ESP32-S1-ENTRY01','EntryVehDetect', 'ENTRY_IR',   1, NOW(), 'admin'),
-  ('ESP32-S2-EXIT01', 'ExitVehDetect',  'EXIT_IR',    1, NOW(), 'admin'),
+  ('ESP32-S1-ENTRY01','EntryVehDetect', 'ENTRY_IR',    0, 0, 1, NOW(), 'admin'),
+  ('ESP32-S2-EXIT01', 'ExitVehDetect',  'EXIT_IR',     0, 0, 1, NOW(), 'admin'),
 
   -- ESP32 보드1: RFID 리더기, 게이트 서보모터, LED 제어
-  ('ESP32-RFID-01',   'RFIDReader',     'RFID',       1, NOW(), 'admin'),
-  ('ESP32-GATE-01',   'GateServo',      'GATE_SERVO', 1, NOW(), 'admin'),
-  ('ESP32-LED-01',   'LEDControl',      'LED_CONTROL', 1, NOW(), 'admin'),
+  ('ESP32-RFID-01',   'RFIDReader',     'RFID',        0, 0, 1, NOW(), 'admin'),
+  ('ESP32-GATE-01',   'GateServo',      'GATE_SERVO',  1, 0, 1, NOW(), 'admin'),
+  ('ESP32-LED-01',   'LEDControl',      'LED_CONTROL', 0, 0, 1, NOW(), 'admin'),
 
   -- ESP32 보드1: 주차면 제어
-  ('ESP32-IR-PARKINGLOT01', 'ParkingLotDetect',  'PARKING_IR',    1, NOW(), 'admin'),
-  ('ESP32-IR-PARKINGLOT02', 'ParkingLotDetect',  'PARKING_IR',    1, NOW(), 'admin'),
-  ('ESP32-IR-PARKINGLOT03', 'ParkingLotDetect',  'PARKING_IR',    1, NOW(), 'admin'),
-  ('ESP32-IR-PARKINGLOT04', 'ParkingLotDetect',  'PARKING_IR',    1, NOW(), 'admin')
+  ('ESP32-IR-PARKINGLOT01', 'ParkingLotDetect',  'PARKING_IR',     0, 0, 1, NOW(), 'admin'),
+  ('ESP32-IR-PARKINGLOT02', 'ParkingLotDetect',  'PARKING_IR',     0, 0, 1, NOW(), 'admin'),
+  ('ESP32-IR-PARKINGLOT03', 'ParkingLotDetect',  'PARKING_IR',     0, 0, 1, NOW(), 'admin'),
+  ('ESP32-IR-PARKINGLOT04', 'ParkingLotDetect',  'PARKING_IR',     0, 0, 1, NOW(), 'admin')
 
 ON DUPLICATE KEY UPDATE
   name = VALUES(name),
   sensor_type = VALUES(sensor_type),
+  sensor_states = VALUES(sensor_states),
+  gate_auto_state = VALUES(gate_auto_state),
   is_active = VALUES(is_active);
 
 
