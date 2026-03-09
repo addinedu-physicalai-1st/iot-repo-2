@@ -155,6 +155,8 @@ class MainWindow(QMainWindow):
 
         self._update_summary(devices_to_show)
         self._update_devices_table(devices_to_show)
+        operation_mode_on, free_slots = self._tx.get_operation_mode_snapshot()
+        self._device_mgr.sync_exit_lcd_base(operation_mode_on, free_slots, message_type="default")
         self.statusBar().showMessage("데이터 갱신 완료", 2000)
 
     def open_gate_test_dialog(self) -> None:

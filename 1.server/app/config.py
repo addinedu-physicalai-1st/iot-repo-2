@@ -35,6 +35,10 @@ class Settings:
     def udp_port(self) -> int:
         return int(os.getenv("UDP_PORT", "9000"))
 
+    @property
+    def operation_mode_on(self) -> bool:
+        return os.getenv("OPERATION_MODE_ON", "true").lower() in ("1", "true", "yes", "on")
+
 
 settings = Settings()
 

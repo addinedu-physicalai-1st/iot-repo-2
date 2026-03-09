@@ -22,6 +22,19 @@ class ApiClient:
         resp.raise_for_status()
         return resp.json()
 
+    def get_operation_mode(self) -> Dict[str, Any]:
+        resp = self._client.get("/parking/operation-mode")
+        resp.raise_for_status()
+        return resp.json()
+
+    def set_operation_mode(self, operation_mode_on: bool) -> Dict[str, Any]:
+        resp = self._client.post(
+            "/parking/operation-mode",
+            params={"operation_mode_on": str(operation_mode_on).lower()},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def list_devices(self) -> List[Dict[str, Any]]:
         resp = self._client.get("/devices/")
         resp.raise_for_status()
