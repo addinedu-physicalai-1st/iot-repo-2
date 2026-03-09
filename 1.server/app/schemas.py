@@ -123,6 +123,8 @@ class DashboardSummary(BaseModel):
     entry_sensor_detected: bool = False
     exit_sensor_detected: bool = False
     operation_mode_on: bool = True
+    gate_sensor_state: int = 1
+    gate_auto_state: int = 0
     # 관리 클라이언트에서 슬롯별 센서 상태(디바이스 클라에서 올린 것)를
     # 한 번에 볼 수 있도록 상세 슬롯 목록도 포함
     slots: List[ParkingSlotRead] = []
@@ -132,6 +134,10 @@ class SensorBase(BaseModel):
     guid: str
     name: str
     sensor_type: str
+    # 0: 연결안됨, 1: 닫힘, 2: 열림, 3: 자동
+    sensor_states: int = 0
+    # 자동 모드일 때 게이트 실제 상태(0: 동작없음, 1: 열림, 2: 닫힘)
+    gate_auto_state: int = 0
     is_active: bool = True
     created_by: str
 

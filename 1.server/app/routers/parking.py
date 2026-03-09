@@ -5,7 +5,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
-from ..config import settings
+from ..config import set_env_value, settings
 from ..db import get_db
 
 
@@ -19,6 +19,10 @@ ENTRY_EXIT_SENSOR_STATE = {
     "exit_sensor_detected": False,
 }
 OPERATION_MODE_ON = settings.operation_mode_on
+# 0: 연결안됨, 1: 닫힘, 2: 열림, 3: 자동
+GATE_SENSOR_STATE = settings.gate_sensor_state
+# 0: 동작하지 않음, 1: 열림, 2: 닫힘
+GATE_AUTO_STATE = settings.gate_auto_state
 
 
 @router.get("/slots", response_model=List[schemas.ParkingSlotRead])
@@ -102,7 +106,37 @@ def get_operation_mode():
 def set_operation_mode(operation_mode_on: bool):
     global OPERATION_MODE_ON
     OPERATION_MODE_ON = operation_mode_on
+    set_env_value("OPERATION_MODE_ON", "true" if OPERATION_MODE_ON else "false")
     return {"ok": True, "operation_mode_on": OPERATION_MODE_ON}
+
+
+@router.get("/gate-state")
+def get_gate_state():
+    return {
+        "gate_sensor_state": GATE_SENSOR_STATE,
+        "gate_auto_state": GATE_AUTO_STATE,
+    }
+
+
+@router.post("/gate-state")
+def set_gate_state(
+    gate_sensor_state: int | None = None,
+    gate_auto_state: int | None = None,
+):
+    global GATE_SENSOR_STATE, GATE_AUTO_STATE
+
+    if gate_sensor_state is not None:
+        GATE_SENSOR_STATE = int(gate_sensor_state)
+        set_env_value("GATE_SENSOR_STATE", str(GATE_SENSOR_STATE))
+    if gate_auto_state is not None:
+        GATE_AUTO_STATE = int(gate_auto_state)
+        set_env_value("GATE_AUTO_STATE", str(GATE_AUTO_STATE))
+
+    return {
+        "ok": True,
+        "gate_sensor_state": GATE_SENSOR_STATE,
+        "gate_auto_state": GATE_AUTO_STATE,
+    }
 
 
 @router.get("/dashboard", response_model=schemas.DashboardSummary)
@@ -139,6 +173,8 @@ def dashboard_summary(db: Session = Depends(get_db)):
         entry_sensor_detected=ENTRY_EXIT_SENSOR_STATE["entry_sensor_detected"],
         exit_sensor_detected=ENTRY_EXIT_SENSOR_STATE["exit_sensor_detected"],
         operation_mode_on=OPERATION_MODE_ON,
+        gate_sensor_state=GATE_SENSOR_STATE,
+        gate_auto_state=GATE_AUTO_STATE,
         slots=slots,
     )
 

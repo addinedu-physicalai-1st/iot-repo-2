@@ -116,6 +116,10 @@ class Sensor(Base):
     guid = Column(String(32), nullable=False, unique=True)
     name = Column(String(50), nullable=False)
     sensor_type = Column(String(30), nullable=False)
+    # 0: 연결안됨, 1: 닫힘, 2: 열림, 3: 자동
+    sensor_states = Column(Integer, nullable=False, default=0)
+    # 자동 모드일 때 게이트 실제 상태(0: 동작없음, 1: 열림, 2: 닫힘)
+    gate_auto_state = Column(Integer, nullable=False, default=0)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     created_by = Column(String(50), nullable=False)

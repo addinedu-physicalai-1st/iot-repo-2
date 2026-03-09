@@ -21,6 +21,21 @@ class DeviceApiClient:
         resp.raise_for_status()
         return resp.json()
 
+    def set_gate_state(
+        self,
+        *,
+        gate_sensor_state: int | None = None,
+        gate_auto_state: int | None = None,
+    ) -> Dict[str, Any]:
+        params: dict[str, str] = {}
+        if gate_sensor_state is not None:
+            params["gate_sensor_state"] = str(int(gate_sensor_state))
+        if gate_auto_state is not None:
+            params["gate_auto_state"] = str(int(gate_auto_state))
+        resp = self._client.post("/parking/gate-state", params=params)
+        resp.raise_for_status()
+        return resp.json()
+
     def set_slot_occupied(self, slot_name: str, occupied: bool, plate: str | None = None) -> None:
         """슬롯 이름(S1~S4, T1~T6) 기준으로 점유 상태를 서버에 반영."""
         # 슬롯 id를 얻기 위해 이름으로 조회

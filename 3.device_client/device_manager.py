@@ -6,6 +6,9 @@ from info_manager import InfoManager
 from transmission_manager import TransmissionManager
 from esp32_gate_server import Esp32GateServer
 
+ENTRY_GATE_GUID = "DEV-GATE-1"
+MANUAL_GATE_RESEND_INTERVAL_SEC = 2.0
+
 
 class DeviceManager:
     """
@@ -32,7 +35,8 @@ class DeviceManager:
             "detail": "",
             "updated_at": 0.0,
         }
-        self._last_exit_lcd_signature: tuple[bool, int, str] | None = None
+        self._last_exit_lcd_signature: tuple[bool, int, int, int, str] | None = None
+        self._last_manual_gate_cmd_at: float = 0.0
         # parking_slots, device 등록 정보 등을 위한 내부 상태
         self._parking_state: dict[str, bool] = {}
 
@@ -100,6 +104,14 @@ class DeviceManager:
                 self._tx.set_gate_connected_by_ip(ip, False)
             self._tx.set_street_parking_connected_by_ip(ip, connected)
             self._tx.set_entry_exit_sensor_connected(connected)
+            if guid == ENTRY_GATE_GUID:
+                # 보드1_1 연결 정책:
+                # - 연결됨: 기본 '열림(2)' 상태로 서버/UI 동기화
+                # - 끊김: '연결 안됨(0)' 상태로 서버/UI 동기화
+                self._tx.set_gate_state(
+                    gate_sensor_state=2 if connected else 0,
+                    gate_auto_state=0 if not connected else None,
+                )
         except Exception:
             state = "연결" if connected else "해제"
             self._append_gate_log(f"[GATE] 서버 반영 실패 ip={ip} guid={guid} 상태={state}")
@@ -118,6 +130,8 @@ class DeviceManager:
         try:
             self._tx.update_device_ip_by_guid(device_guid, ip, device_name=device_name)
             self._tx.set_gate_connected_by_guid(device_guid, True)
+            if device_guid == ENTRY_GATE_GUID:
+                self._tx.set_gate_state(gate_sensor_state=2)
             self._append_gate_log(
                 f"[REG] DB ip_address 갱신 완료 guid={device_guid} → {ip}"
             )
@@ -206,6 +220,59 @@ class DeviceManager:
         )
         return result
 
+    def sync_entry_gate_mode(
+        self,
+        gate_connected: bool,
+        gate_sensor_state: int,
+        entry_sensor_detected: bool,
+        exit_sensor_detected: bool,
+    ) -> None:
+        """
+        대시보드의 차단기 상태(닫힘/열림/자동)를 실제 보드1_1 모터 상태와 동기화한다.
+        - 연결 해제 시: 서버 상태를 0(연결 안됨)으로 강제
+        - 연결 시 0이면: 기본값 2(열림)으로 복구
+        - 수동(1/2) 선택 시: 해당 상태를 유지하도록 주기적으로 재명령
+        - 자동(3) 선택 시: 입/출차 감지 없으면 닫힘, 감지 있으면 열림
+        """
+        if not gate_connected:
+            self._tx.set_gate_state(gate_sensor_state=0, gate_auto_state=0)
+            return
+
+        target_state = int(gate_sensor_state)
+        if target_state == 0:
+            self._tx.set_gate_state(gate_sensor_state=2)
+            target_state = 2
+
+        if target_state in (1, 2):
+            desired_motor_state = "CLOSED" if target_state == 1 else "OPEN"
+            desired_auto_state = 2 if target_state == 1 else 1
+        elif target_state == 3:
+            detected_any = bool(entry_sensor_detected) or bool(exit_sensor_detected)
+            desired_motor_state = "OPEN" if detected_any else "CLOSED"
+            desired_auto_state = 1 if detected_any else 2
+        else:
+            return
+
+        current_motor_state = str(self._gate_motor_status.get("state") or "").upper()
+        now = time.time()
+        if (
+            current_motor_state == desired_motor_state
+            and (now - self._last_manual_gate_cmd_at) < MANUAL_GATE_RESEND_INTERVAL_SEC
+        ):
+            return
+        if (now - self._last_manual_gate_cmd_at) < MANUAL_GATE_RESEND_INTERVAL_SEC:
+            return
+
+        if target_state == 3:
+            result = self.open_gate() if desired_motor_state == "OPEN" else self.close_gate()
+        else:
+            result = self.close_gate() if target_state == 1 else self.open_gate()
+        self._last_manual_gate_cmd_at = now
+        if result.get("ok"):
+            if target_state in (1, 2):
+                self._tx.set_gate_state(gate_sensor_state=target_state)
+            self._tx.set_gate_auto_state(desired_auto_state)
+
     def write_siteid(self, site_id: str) -> None:
         if self._gate_server:
             self._gate_server.send_write_siteid(site_id)
@@ -220,23 +287,42 @@ class DeviceManager:
         self,
         operation_mode_on: bool,
         free_slots: int,
+        gate_sensor_state: int,
+        gate_auto_state: int,
         message_type: str = "default",
     ) -> None:
         """
         출구 보드 LCD 기본 메시지 동기화.
         - message_type 으로 향후 입차 상황별 메시지 분기 확장 가능
         """
-        signature = (operation_mode_on, int(free_slots), message_type)
+        signature = (operation_mode_on, int(free_slots), int(gate_sensor_state), int(gate_auto_state), message_type)
         if self._last_exit_lcd_signature == signature:
             return
 
-        if not operation_mode_on:
-            line1 = "PARKING Closed."
-            line2 = "Sorry."
+        # 0: 연결안됨, 1: 닫힘, 2: 열림, 3: 자동
+        # 자동(3)일 때만 운영상태 기반 메시지/자동게이트 상태를 동기화한다.
+        if int(gate_sensor_state) == 3:
+            if operation_mode_on:
+                line1 = "Welcom PARKING"
+                line2 = f"empty {int(free_slots)}"
+                if int(gate_auto_state) != 1:
+                    self._tx.set_gate_auto_state(1)
+            else:
+                line1 = "PARKING Closed."
+                line2 = "Sorry."
+                if int(gate_auto_state) != 2:
+                    self._tx.set_gate_auto_state(2)
         else:
-            # 기본 운영 메시지(요청 사양)
-            line1 = "Welcom PARKING"
-            line2 = f"empty {int(free_slots)}"
+            # 수동/미연결 모드에서는 기본 베이스만 제공(향후 타입별 확장 포인트)
+            if int(gate_sensor_state) == 1:
+                line1 = "GATE MANUAL"
+                line2 = "CLOSED"
+            elif int(gate_sensor_state) == 2:
+                line1 = "GATE MANUAL"
+                line2 = "OPEN"
+            else:
+                line1 = "GATE OFFLINE"
+                line2 = "CHECK CONNECT"
 
         sent = self.send_exit_display(line1[:16], line2[:16])
         if sent:

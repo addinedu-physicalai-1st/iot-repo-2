@@ -30,6 +30,9 @@ class DashboardWindow(QMainWindow):
         self._resident_window: ResidentManagerWindow | None = None
         self._sensor_window: SensorManagerWindow | None = None
         self._operation_mode_on: bool = True
+        self._gate_sensor_state: int = 1
+        self._entry_gate_connected: bool = False
+        self._syncing_gate_combo: bool = False
 
         self.setWindowTitle("스마트 주차장 관리 시스템 - 대시보드")
         self.resize(1200, 700)
@@ -190,6 +193,7 @@ class DashboardWindow(QMainWindow):
         self.combo_gate_status.currentIndexChanged.connect(
             self._update_gate_combo_enabled
         )
+        self.combo_gate_status.currentIndexChanged.connect(self._on_gate_status_changed)
         self._update_gate_combo_enabled()
         gate_row.addWidget(label_gate)
         gate_row.addWidget(self.combo_gate_status)
@@ -386,21 +390,18 @@ class DashboardWindow(QMainWindow):
         """
         차단기 상태 콤보박스의 항목 활성화/비활성 제어.
 
-        - 인덱스 0 ('연결 안됨'): 0번만 선택 가능, 나머지 항목 비활성화
-        - 인덱스 1~3 ('닫힘', '열림', '자동'): 모든 항목 선택 가능
+        - esp32_board1_1 미연결: 0번만 선택 가능, 1~3 비활성화
+        - esp32_board1_1 연결됨: 0번 비활성화, 1~3 선택 가능
         """
         model = self.combo_gate_status.model()
-        current = self.combo_gate_status.currentIndex()
         for i in range(model.rowCount()):
             item = model.item(i)
             if item is None:
                 continue
-            if current == 0:
-                # 연결 안됨일 때는 0번만 선택 가능
+            if not self._entry_gate_connected:
                 item.setEnabled(i == 0)
             else:
-                # 연결된 상태에서는 모든 항목 선택 가능
-                item.setEnabled(True)
+                item.setEnabled(i != 0)
 
     def update_devices_table(self, devices: List[Dict[str, Any]]) -> None:
         self.table_devices.setRowCount(len(devices))
@@ -448,20 +449,38 @@ class DashboardWindow(QMainWindow):
         연결 상태를 상단 요약 UI(차단기 상태/센서 버튼)에 반영한다.
         """
         gate_connected = False
+        found_by_guid = False
 
         for dev in devices:
-            dtype = (dev.get("type") or "").lower()
-            if dtype == "gate_controller":
+            if (dev.get("device_guid") or "").strip() == "DEV-GATE-1":
                 gate_connected = bool(dev.get("is_connected"))
+                found_by_guid = True
                 break
+        if not found_by_guid:
+            for dev in devices:
+                dtype = (dev.get("type") or "").lower()
+                if dtype == "gate_controller":
+                    gate_connected = bool(dev.get("is_connected"))
+                    break
+        self._entry_gate_connected = gate_connected
 
-        if gate_connected:
-            # 차단기 장비가 연결된 경우: '닫힘' 상태를 기본으로 두고 콤보박스 활성화
-            self.combo_gate_status.setCurrentIndex(1)  # 닫힘
-        else:
-            # 장비 미연결 시: '연결 안됨' 표시 및 콤보박스 잠금
-            self.combo_gate_status.setCurrentIndex(0)  # 연결 안됨
-
+        # 서버에 저장된 gate 상태 코드와 연동 (0:연결안됨 1:닫힘 2:열림 3:자동)
+        desired_idx = int(dashboard.get("gate_sensor_state", 1))
+        if not gate_connected:
+            desired_idx = 0
+        elif desired_idx == 0:
+            # 연결되었는데 서버값이 0이면 기본 상태를 열림(2)으로 복구
+            try:
+                data = self.api.set_gate_state(gate_sensor_state=2)
+                desired_idx = int(data.get("gate_sensor_state", 2))
+            except Exception:
+                desired_idx = 2
+        desired_idx = max(0, min(3, desired_idx))
+        self._gate_sensor_state = desired_idx
+        if self.combo_gate_status.currentIndex() != desired_idx:
+            self._syncing_gate_combo = True
+            self.combo_gate_status.setCurrentIndex(desired_idx)
+            self._syncing_gate_combo = False
         self._update_gate_combo_enabled()
 
         # 입/출차 감지 센서 버튼 상태 (주차타워 T1/T2 와 무관한 별도 상태)
@@ -525,6 +544,24 @@ class DashboardWindow(QMainWindow):
         except Exception as e:  # noqa: BLE001
             self.statusBar().showMessage(f"운영 상태 변경 실패: {e}", 3000)
             self._apply_operation_mode_ui(self._operation_mode_on)
+
+    def _on_gate_status_changed(self, idx: int) -> None:
+        if self._syncing_gate_combo:
+            return
+        if not self._entry_gate_connected:
+            return
+        try:
+            data = self.api.set_gate_state(gate_sensor_state=idx)
+            self._gate_sensor_state = int(data.get("gate_sensor_state", idx))
+            self.statusBar().showMessage(
+                f"차단기 상태 변경: {self.combo_gate_status.currentText()}",
+                2000,
+            )
+        except Exception as e:  # noqa: BLE001
+            self.statusBar().showMessage(f"차단기 상태 변경 실패: {e}", 3000)
+            self._syncing_gate_combo = True
+            self.combo_gate_status.setCurrentIndex(self._gate_sensor_state)
+            self._syncing_gate_combo = False
 
     def update_events(self, events: List[Dict[str, Any]]) -> None:
         if not events:

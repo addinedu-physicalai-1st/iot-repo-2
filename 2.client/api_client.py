@@ -35,6 +35,26 @@ class ApiClient:
         resp.raise_for_status()
         return resp.json()
 
+    def get_gate_state(self) -> Dict[str, Any]:
+        resp = self._client.get("/parking/gate-state")
+        resp.raise_for_status()
+        return resp.json()
+
+    def set_gate_state(
+        self,
+        *,
+        gate_sensor_state: int | None = None,
+        gate_auto_state: int | None = None,
+    ) -> Dict[str, Any]:
+        params: dict[str, str] = {}
+        if gate_sensor_state is not None:
+            params["gate_sensor_state"] = str(int(gate_sensor_state))
+        if gate_auto_state is not None:
+            params["gate_auto_state"] = str(int(gate_auto_state))
+        resp = self._client.post("/parking/gate-state", params=params)
+        resp.raise_for_status()
+        return resp.json()
+
     def list_devices(self) -> List[Dict[str, Any]]:
         resp = self._client.get("/devices/")
         resp.raise_for_status()

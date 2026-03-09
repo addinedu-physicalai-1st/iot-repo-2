@@ -35,6 +35,8 @@ TYPE_CMD_WRITE = 3
 TYPE_DEVICE_LIST = 4
 TYPE_DEV_REGISTER = 6   # 장비 등록 패킷 (device_guid, device_name)
 TYPE_CMD_DISPLAY = 7    # 서버 → 출구 보드(DEV-GATE-2): LCD 2줄 출력
+ENTRY_GATE_GUID = "DEV-GATE-1"
+EXIT_GATE_GUID = "DEV-GATE-2"
 
 EV_NAMES = {
     1: "ENTRY_DETECTED",
@@ -96,6 +98,7 @@ class Esp32GateServer(threading.Thread):
         self._gate_state_detail: str = ""
         self._gate_state_updated_at: float = 0.0
         self._pending_cmd: Optional[str] = None  # "OPEN" | "CLOSE"
+        self._pending_target_guid: Optional[str] = None
         self._pending_result: Optional[Dict[str, Any]] = None
         self._pending_event = threading.Event()
 
@@ -112,32 +115,54 @@ class Esp32GateServer(threading.Thread):
             for a in dead:
                 self._clients.pop(a, None)
 
+    def _send_to_guid(self, pkt_type: int, payload: bytes, target_guid: str) -> bool:
+        """특정 device_guid 로 등록된 클라이언트 1대에만 패킷 전송."""
+        data = struct.pack(STRUCT_FORMAT, pkt_type, payload)
+        with self._clients_lock:
+            for a, conn in list(self._clients.items()):
+                if self._client_guids.get(a) != target_guid:
+                    continue
+                try:
+                    conn.sendall(data)
+                    return True
+                except OSError:
+                    return False
+        return False
+
     # ───────── 외부 호출용 API (명령 전송) ─────────
     def _send_gate_command(
         self,
         pkt_type: int,
         cmd_name: str,
         wait_result_sec: float,
+        target_guid: str = ENTRY_GATE_GUID,
     ) -> Dict[str, Any]:
         with self._clients_lock:
-            if not self._clients:
-                return {
-                    "ok": False,
-                    "command": cmd_name,
-                    "state": self._gate_state,
-                    "detail": "NO_CLIENT",
-                    "message": "게이트 보드 미연결",
-                }
+            target_connected = any(
+                self._client_guids.get(a) == target_guid for a in self._clients
+            )
+        if not target_connected:
+            return {
+                "ok": False,
+                "command": cmd_name,
+                "state": self._gate_state,
+                "detail": "NO_CLIENT",
+                "message": f"게이트 보드({target_guid}) 미연결",
+            }
         with self._gate_state_lock:
             self._pending_cmd = cmd_name
+            self._pending_target_guid = target_guid
             self._pending_result = None
             self._pending_event.clear()
         try:
-            self._send_to_all(pkt_type, b"\x00" * 32)
+            sent = self._send_to_guid(pkt_type, b"\x00" * 32, target_guid)
+            if not sent:
+                raise OSError("target send failed")
             self._on_log(f"[CMD] 게이트 {cmd_name} 전송")
         except OSError:
             with self._gate_state_lock:
                 self._pending_cmd = None
+                self._pending_target_guid = None
             self._on_log(f"[CMD] 게이트 {cmd_name} 전송 실패 (소켓 에러)")
             return {
                 "ok": False,
@@ -150,6 +175,7 @@ class Esp32GateServer(threading.Thread):
         if not self._pending_event.wait(wait_result_sec):
             with self._gate_state_lock:
                 self._pending_cmd = None
+                self._pending_target_guid = None
             return {
                 "ok": False,
                 "command": cmd_name,
@@ -160,6 +186,7 @@ class Esp32GateServer(threading.Thread):
 
         with self._gate_state_lock:
             if self._pending_result is None:
+                self._pending_target_guid = None
                 return {
                     "ok": False,
                     "command": cmd_name,
@@ -203,7 +230,7 @@ class Esp32GateServer(threading.Thread):
         data = struct.pack(STRUCT_FORMAT, TYPE_CMD_DISPLAY, payload)
         with self._clients_lock:
             for a, conn in list(self._clients.items()):
-                if self._client_guids.get(a) != "DEV-GATE-2":
+                if self._client_guids.get(a) != EXIT_GATE_GUID:
                     continue
                 try:
                     conn.sendall(data)
@@ -212,7 +239,7 @@ class Esp32GateServer(threading.Thread):
                 except OSError:
                     self._on_log("[CMD] 출구 LCD 전송 실패 (소켓 에러)")
                     return False
-        self._on_log("[CMD] 출구 보드(DEV-GATE-2) 미연결, LCD 전송 스킵")
+        self._on_log(f"[CMD] 출구 보드({EXIT_GATE_GUID}) 미연결, LCD 전송 스킵")
         return False
 
     # ───────── 스레드 메인 루프 ─────────
@@ -322,13 +349,18 @@ class Esp32GateServer(threading.Thread):
 
                     if ev in (4, 5):
                         motor_state = "OPEN" if ev == 4 else "CLOSED"
+                        client_guid = ""
+                        with self._clients_lock:
+                            client_guid = self._client_guids.get(addr, "")
                         with self._gate_state_lock:
                             self._gate_state = motor_state
                             self._gate_state_source = src
                             self._gate_state_detail = ext
                             self._gate_state_updated_at = time.time()
                             expected_ev = 4 if self._pending_cmd == "OPEN" else 5 if self._pending_cmd == "CLOSE" else None
-                            if expected_ev == ev:
+                            if expected_ev == ev and (
+                                self._pending_target_guid is None or self._pending_target_guid == client_guid
+                            ):
                                 self._pending_result = {
                                     "ok": True,
                                     "command": self._pending_cmd,
@@ -338,6 +370,7 @@ class Esp32GateServer(threading.Thread):
                                     "message": "명령 수행 완료",
                                 }
                                 self._pending_cmd = None
+                                self._pending_target_guid = None
                                 self._pending_event.set()
                         self._on_gate_motor_event(motor_state, src, ext)
 
