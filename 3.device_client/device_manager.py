@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from info_manager import InfoManager
 from transmission_manager import TransmissionManager
 from esp32_gate_server import Esp32GateServer
@@ -24,6 +26,12 @@ class DeviceManager:
         self._gate_logs: list[str] = []
         self._gate_devices: list[dict] = []
         self._gate_connected_ips: set[str] = set()  # 연결된 보드 IP 목록
+        self._gate_motor_status: dict[str, object] = {
+            "state": "UNKNOWN",
+            "source": "",
+            "detail": "",
+            "updated_at": 0.0,
+        }
         # parking_slots, device 등록 정보 등을 위한 내부 상태
         self._parking_state: dict[str, bool] = {}
 
@@ -41,6 +49,7 @@ class DeviceManager:
                 on_state_change=self._on_gate_state_change,
                 on_register=self._on_device_register,
                 on_parking_event=self._on_parking_event,
+                on_gate_motor_event=self._on_gate_motor_event,
             )
             self._gate_server.start()
 
@@ -153,13 +162,36 @@ class DeviceManager:
     def get_gate_devices(self) -> list[dict]:
         return list(self._gate_devices)
 
-    def open_gate(self) -> None:
-        if self._gate_server:
-            self._gate_server.send_open_gate()
+    def _on_gate_motor_event(self, state: str, src: str, detail: str) -> None:
+        self._gate_motor_status = {
+            "state": state,
+            "source": src,
+            "detail": detail,
+            "updated_at": time.time(),
+        }
 
-    def close_gate(self) -> None:
-        if self._gate_server:
-            self._gate_server.send_close_gate()
+    def get_gate_motor_status(self) -> dict[str, object]:
+        return dict(self._gate_motor_status)
+
+    def open_gate(self) -> dict[str, object]:
+        if not self._gate_server:
+            return {"ok": False, "state": "UNKNOWN", "detail": "NO_SERVER"}
+        result = self._gate_server.send_open_gate()
+        self._gate_motor_status = self._gate_server.get_gate_motor_status()
+        self._append_gate_log(
+            f"[CMD-RESULT] OPEN ok={result.get('ok')} state={result.get('state')} detail={result.get('detail')}"
+        )
+        return result
+
+    def close_gate(self) -> dict[str, object]:
+        if not self._gate_server:
+            return {"ok": False, "state": "UNKNOWN", "detail": "NO_SERVER"}
+        result = self._gate_server.send_close_gate()
+        self._gate_motor_status = self._gate_server.get_gate_motor_status()
+        self._append_gate_log(
+            f"[CMD-RESULT] CLOSE ok={result.get('ok')} state={result.get('state')} detail={result.get('detail')}"
+        )
+        return result
 
     def write_siteid(self, site_id: str) -> None:
         if self._gate_server:
