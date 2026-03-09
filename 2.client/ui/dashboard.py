@@ -499,6 +499,19 @@ class DashboardWindow(QMainWindow):
             widget = self.slot_widgets.get(name)
             if not widget:
                 continue
+
+            # 주차타워 슬롯(T1~T6)은 현재 센서 연동 대상이 아니므로 항상 비활성(회색)으로 표시.
+            if isinstance(name, str) and name.startswith("T"):
+                widget.setStyleSheet(
+                    """
+                    background-color: #616161;  /* 센서 연결 안됨: 회색 */
+                    border-radius: 6px;
+                    border: 2px solid #424242;
+                    font-weight: bold;
+                """
+                )
+                continue
+
             occupied = s.get("is_occupied", False)
             sensor_connected = s.get("sensor_connected", False)
 
