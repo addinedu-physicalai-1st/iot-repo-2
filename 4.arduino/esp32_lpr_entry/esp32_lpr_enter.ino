@@ -16,7 +16,7 @@ const char* password = "201class2!";
 const char* ssid     = "iptime_WiFiCE6D";
 const char* password = "!Tony6251@";
 #endif
-char serverHostBuf[64] = "192.168.0.149";
+char serverHostBuf[64] = "192.168.0.137";
 
 uint16_t restPortNum = 7080;
 uint16_t udpPortNum  = 7070;

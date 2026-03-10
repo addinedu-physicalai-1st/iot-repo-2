@@ -11,12 +11,12 @@
 const char* ssid     = "addinedu_201class_2-2.4G";
 const char* password = "201class2!";
 
-const char* serverIP = "192.168.0.149"; //Tony Home
+const char* serverIP = "192.168.0.137"; //Tony Home
 #else // Debug Home Mode
 const char* ssid     = "iptime_WiFiCE6D";
 const char* password = "!Tony6251@";
 
-const char* serverIP = "192.168.25.35"; //Tony Home
+const char* serverIP = "192.168.0.137"; //Tony Home
 #endif
 const uint16_t serverPort = 8080;
 

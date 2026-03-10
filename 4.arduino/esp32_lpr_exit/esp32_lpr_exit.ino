@@ -12,7 +12,7 @@
 const char* ssid     = "addinedu_201class_2-2.4G";
 const char* password = "201class2!";
 
-char serverHostBuf[64] = "192.168.0.149";
+char serverHostBuf[64] = "192.168.0.137";
 
 uint16_t restPortNum = 7080;
 uint16_t udpPortNum  = 7090;

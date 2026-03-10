@@ -5,7 +5,7 @@
 const char* ssid     = "addinedu_201class_2-2.4G";
 const char* password = "201class2!";
 
-const char* serverIP = "192.168.0.149"; // 3.device_client PC IP
+const char* serverIP = "192.168.0.137"; // 3.device_client PC IP
 const uint16_t serverPort = 8080;       // UnifiedPacket TCP 포트
 
 // --- Packet Definitions (UnifiedPacket) ---

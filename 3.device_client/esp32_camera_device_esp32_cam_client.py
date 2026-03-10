@@ -54,7 +54,7 @@ IMG_DIR = os.path.join(SCRIPT_DIR, "img")
 _api_state = {
     "pending_command": "none",
     "devices": [],  # [{"guid":"...", "name":"...", "ip":"...", "last_seen": float}, ...]
-    "server_for_device": {"server_host": "192.168.25.35", "rest_port": 5555, "udp_port": 7072},
+    "server_for_device": {"server_host": "192.168.0.137", "rest_port": 5555, "udp_port": 7072},
     "lock": threading.Lock(),
 }
 
@@ -163,7 +163,7 @@ def api_device_config():
         return jsonify(_get_server_for_device())
     try:
         j = request.get_json(force=True, silent=True) or {}
-        host = (j.get("server_host") or j.get("host") or "").strip() or "192.168.25.35"
+        host = (j.get("server_host") or j.get("host") or "").strip() or "192.168.0.137"
         rest_port = int(j.get("rest_port", 5555))
         udp_port = int(j.get("udp_port", 7072))
         _set_server_for_device(host, rest_port, udp_port)
@@ -366,8 +366,8 @@ class CamApp555(QWidget):
         grid = QGridLayout()
         grid.addWidget(QLabel("서버 호스트:"), 0, 0)
         self.edit_server_host = QLineEdit()
-        self.edit_server_host.setPlaceholderText("192.168.25.35")
-        self.edit_server_host.setText("192.168.25.35")
+        self.edit_server_host.setPlaceholderText("192.168.0.137")
+        self.edit_server_host.setText("192.168.0.137")
         grid.addWidget(self.edit_server_host, 0, 1)
         grid.addWidget(QLabel("REST 포트:"), 1, 0)
         self.edit_rest_port = QLineEdit()
@@ -481,12 +481,12 @@ class CamApp555(QWidget):
 
     def _refresh_server_edits_from_state(self):
         cfg = _get_server_for_device()
-        self.edit_server_host.setText(cfg.get("server_host", "192.168.25.35"))
+        self.edit_server_host.setText(cfg.get("server_host", "192.168.0.137"))
         self.edit_rest_port.setText(str(cfg.get("rest_port", 5555)))
         self.edit_udp_port.setText(str(cfg.get("udp_port", 7072)))
 
     def _save_server_config(self):
-        host = self.edit_server_host.text().strip() or "192.168.25.35"
+        host = self.edit_server_host.text().strip() or "192.168.0.137"
         try:
             rp = int(self.edit_rest_port.text().strip() or "5555")
             up = int(self.edit_udp_port.text().strip() or "7072")
