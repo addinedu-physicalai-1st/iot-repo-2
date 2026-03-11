@@ -12,7 +12,11 @@
 const char* ssid     = "addinedu_201class_2-2.4G";
 const char* password = "201class2!";
 
+#if 1
 char serverHostBuf[64] = "192.168.0.137";
+#else
+char serverHostBuf[64] = "192.168.0.149";
+#endif
 
 uint16_t restPortNum = 7080;
 uint16_t udpPortNum  = 7090;
@@ -194,7 +198,7 @@ void setup() {
     config.pixel_format = PIXFORMAT_JPEG;
     config.frame_size = FRAMESIZE_QVGA;
     config.jpeg_quality = 10;
-    config.fb_count = 2;
+    config.fb_count = 3;
     config.grab_mode = CAMERA_GRAB_LATEST;
 
     if (esp_camera_init(&config) != ESP_OK) {
@@ -214,30 +218,30 @@ void setup() {
     Serial.println(WiFi.localIP());
     Serial.printf("[666] WiFi SSID=%s\n", ssid);
 
-    restRegister();
-    restPollConfig();
-    xTaskCreate(udpStreamTask, "udp666", 8192, NULL, 1, NULL);
+    //restRegister();
+    //restPollConfig();
+    //xTaskCreate(udpStreamTask, "udp666", 8192, NULL, 1, NULL);
     Serial.println("[666] Init done. UDP streaming auto started.");
 }
 
 void loop() {
-    if (WiFi.status() != WL_CONNECTED) {
-        delay(5000);
-        return;
+    static unsigned long lastFrameTime = 0;
+    static uint8_t frameNo = 0;
+    const unsigned long frameInterval = 100; // 정확히 10 FPS 유지
+    
+    unsigned long now = millis();
+    
+    if (now - lastFrameTime >= frameInterval)
+    {
+      lastFrameTime = now;
+      
+      camera_fb_t *fb = esp_camera_fb_get();
+      if (fb) {
+        sendImageUDP(fb->buf, fb->len, frameNo);
+        esp_camera_fb_return(fb);
+        frameNo++;
+      }
     }
-    // --- 666: REST API 명령 폴링은 기동 후 스타트하지 않음 (주석 처리) ---
-    // if (millis() - lastRestPoll >= REST_POLL_INTERVAL_MS) {
-    //     lastRestPoll = millis();
-    //     restPollCommand();
-    // }
-    if (millis() - lastConfigPoll >= REST_CONFIG_POLL_INTERVAL_MS) {
-        lastConfigPoll = millis();
-        restPollConfig();
-    }
-    // --- 666: /api/devices 폴링도 주석 처리 ---
-    // if (millis() - lastDevicesPoll >= REST_DEVICES_POLL_INTERVAL_MS) {
-    //     lastDevicesPoll = millis();
-    //     restPollDevices();
-    // }
-    delay(10);
+  
+    delay(1); // 시스템 유휴 시간 확보
 }
