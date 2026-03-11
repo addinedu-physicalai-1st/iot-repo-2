@@ -71,11 +71,12 @@ class TransmissionManager:
             on_frame=self._on_lpr_udp_frame,
         )
         self._lpr_udp_receiver.start()
-        # LPR 출구 UDP 수신 시작 → 프레임은 _lpr_exit_frame_queue 에 적재
+        # LPR 출구 UDP 수신 (ver7 안정 형식: 3바이트 헤더 + JPEG 끝 마커)
         self._lpr_exit_udp_receiver = Esp32UdpReceiver(
             host=settings.udp_listen_host,
             port=settings.lpr_exit_udp_port,
             on_frame=self._on_lpr_exit_udp_frame,
+            use_ver7_format=True,
         )
         self._lpr_exit_udp_receiver.start()
         # 시작 시 입구/출구 LPR 의 is_connected 를 끊김(false) 으로 한 번 강제 동기화해 두면
