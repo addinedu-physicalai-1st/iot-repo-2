@@ -116,7 +116,9 @@ class TransmissionManager:
     def should_run_lpr_ocr(self, is_exit: bool) -> bool:
         """
         테스트 UI가 열려 있거나, APDS(입/출차 감지) 센서가 최근에 반응했을 때만 OCR을 허용한다.
+        (현재 디버깅을 위해 항상 True 반환 처리)
         """
+        return True
         now = time.time()
         if is_exit:
             return self._lpr_ocr_exit_ui_active or (now <= self._lpr_ocr_exit_apds_until)
@@ -593,6 +595,9 @@ class TransmissionManager:
     def _on_lpr_udp_frame(self, fno: int, img: Any) -> None:
         if fno % 30 == 0:
             print(f"[UDP-DEBUG] Entry Frame received: fno={fno}")
+        if img is not None:
+            # 상하 반전 (이전 -1에서 0으로 변경하여 좌우 반전 제거)
+            img = cv2.flip(img, 0)
         self._mark_lpr_seen()
         self._lpr_last_frame_ts = time.time()
         self._latest_lpr_frame = (fno, img)  # non-consuming latest frame
@@ -612,7 +617,8 @@ class TransmissionManager:
             if self._lpr_exit_frame_queue.full():
                 self._lpr_exit_frame_queue.get_nowait()
             if img is not None:
-                img = cv2.flip(img, 1)
+                # 출구 LPR 보정: 180도 회전 (상하+좌우 모두 반전)
+                img = cv2.flip(img, -1)
             self._latest_lpr_exit_frame = (fno, img)  # non-consuming latest frame
             self._lpr_exit_frame_queue.put((fno, img))
         except Exception:

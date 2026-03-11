@@ -159,8 +159,6 @@ class LprExitTestDialog(QDialog):
             fno, img = frame
             if img is not None:
                 self._last_frame_time = _time.time()
-                # 출구 LPR 영상 보정: 좌우 반전 (번호판 글자 정상 방향)
-                img = cv2.flip(img, 1)
                 self._last_frame = img
                 img = np.ascontiguousarray(img)
                 h, w, ch = img.shape

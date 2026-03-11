@@ -188,6 +188,9 @@ class LprRecognitionWorker(QObject):
             if frame is None:
                 time.sleep(0.02)
                 continue
+            
+            # [DEBUG] Frame received in OCR loop
+            print(f"[LPR-DEBUG] Worker received frame. Stability count: {plate_stability_counter}")
 
             if self._mirror_flip:
                 try:
@@ -216,6 +219,8 @@ class LprRecognitionWorker(QObject):
                 consecutive_empty = 0
                 if not is_cooldown:
                     plate_stability_counter += 1
+                    # [DEBUG] Box detected
+                    print(f"[LPR-DEBUG] YOLO detected {len(boxes)} box(es). Stability: {plate_stability_counter}")
 
             for box in boxes:
                 x1, y1, x2, y2 = map(int, box)
@@ -242,16 +247,14 @@ class LprRecognitionWorker(QObject):
                         final_text, confidence = _extract_plate_text_from_ocr_result(ocr_results)
                         last_ocr_text = final_text
                         
-                        CONF_THRESHOLD = 0.8  # 사용자 요청: 신뢰도가 높을 때만 로그 전송
+                        CONF_THRESHOLD = 0.5  # 조정: 0.8 -> 0.5 (더 많은 인식 허용)
                         
                         if len(final_text) >= 5 and confidence >= CONF_THRESHOLD:
                             from datetime import datetime
                             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             self.result_ready.emit(f"{ts} | {final_text} (conf={confidence:.2f})")
-                        elif final_text:
-                            # 만약 번호판은 보이지만 신뢰도가 낮거나 미완성인 경우 무시하거나 디버그 정보로만 표시
-                            # (사용자 요청: 신뢰도가 낮으면 로그를 보내지 않음)
-                            # self.result_ready.emit(f"[LowConf] {final_text} (conf={confidence:.2f})")
+                        elif final_text and len(final_text) >= 5:
+                            # 신뢰도가 낮더라도 디버그용으로 표시하거나 무시 (여기서는 로그창 지저분해지지 않게 무시)
                             pass
                     except Exception as ex:
                         self.result_ready.emit(f"[OCR 오류] {ex}")

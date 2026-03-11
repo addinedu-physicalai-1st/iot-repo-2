@@ -123,8 +123,6 @@ class LprEnterTestDialog(QDialog):
             fno, img = frame
             if img is not None:
                 self._last_frame_time = _time.time()
-                # 입구 LPR 영상 보정: 상하 반전
-                img = cv2.flip(img, 0)
                 self._last_frame = img
                 img = np.ascontiguousarray(img)
                 h, w, ch = img.shape

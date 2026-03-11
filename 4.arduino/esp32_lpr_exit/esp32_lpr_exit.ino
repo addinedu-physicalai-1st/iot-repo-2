@@ -218,9 +218,13 @@ void setup() {
     Serial.println(WiFi.localIP());
     Serial.printf("[666] WiFi SSID=%s\n", ssid);
 
-    //restRegister();
-    //restPollConfig();
-    //xTaskCreate(udpStreamTask, "udp666", 8192, NULL, 1, NULL);
+    restRegister();
+    restPollConfig();
+    // xTaskCreate(udpStreamTask, "udp666", 8192, NULL, 1, NULL); 
+    // ^ loop()에서 이미 sendImageUDP를 호출하고 있으므로 중복 실행 방지 위해 주석 유지 하거나,
+    // loop 형식을 사용할지 Task 형식을 사용할지 결정 필요. 
+    // 여기서는 기존 loop 형식이 살아있으므로 Register/Config만 활성화.
+    
     Serial.println("[666] Init done. UDP streaming auto started.");
 }
 

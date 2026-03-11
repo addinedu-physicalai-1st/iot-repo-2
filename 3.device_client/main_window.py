@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QImage, QPixmap
 
 from architect_manager import ArchitectManager
-from device_manager import DeviceManager
+from device_manager import DeviceManager, ENTRY_GATE_GUID
 from info_manager import InfoManager
 from transmission_manager import TransmissionManager
 from gate_test_dialog import GateTestDialog
@@ -29,8 +29,53 @@ from lpr_exit_test_dialog import LprExitTestDialog
 from rfid_management_tab import RfidManagementTab
 
 from PyQt6.QtWidgets import QTabWidget
+from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
 
-ENTRY_GATE_GUID = "DEV-GATE-1"
+
+class DataRefreshWorker(QThread):
+    """
+    백엔드 서버와 통신하여 데이터를 갱신하는 백그라운드 스레드.
+    GUI 동결 방지를 위해 네트워크 집약적인 작업을 수행한다.
+    """
+    data_updated = pyqtSignal(dict)  # { "devices": [...], "dashboard_snapshot": (...), "managed_ids": [...] }
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, transmission_manager: TransmissionManager) -> None:
+        super().__init__()
+        self._tx = transmission_manager
+        self._running = True
+
+    def stop(self) -> None:
+        self._running = False
+
+    def run(self) -> None:
+        while self._running:
+            try:
+                # 1. 서버로부터 최신 정보 갱신
+                self._tx.refresh_from_server()
+
+                # 2. 필요한 데이터 스냅샷 생성
+                managed_ids = self._tx.get_my_managed_device_ids()
+                all_devices = self._tx._info.devices
+                snapshot = self._tx.get_operation_mode_snapshot()
+                entry_detected, exit_detected = self._tx.get_entry_exit_detection_snapshot()
+
+                data = {
+                    "all_devices": all_devices,
+                    "managed_ids": managed_ids,
+                    "dashboard_snapshot": snapshot,
+                    "detection_snapshot": (entry_detected, exit_detected),
+                }
+
+                self.data_updated.emit(data)
+            except Exception as e:
+                self.error_occurred.emit(str(e))
+
+            # 5초 간격으로 반복
+            time.sleep(5)
+
+
+import time
 
 
 class MainWindow(QMainWindow):
@@ -66,8 +111,14 @@ class MainWindow(QMainWindow):
         self.lpr_popup_signal.connect(self._handle_lpr_popup)
         self._device_mgr.on_lpr_popup = self._emit_lpr_popup
 
-        self.setWindowTitle("스마트 주차장 - 디바이스 클라이언트 대시보드")
+        self.setWindowTitle("스마트 주차장 - 디바이스 클라이언트 대시보드 (Optimized)")
         self.resize(1100, 700)
+
+        # ───────── 백그라운드 데이터 워커 설정 ─────────
+        self._refresh_worker = DataRefreshWorker(self._tx)
+        self._refresh_worker.data_updated.connect(self._on_data_refreshed)
+        self._refresh_worker.error_occurred.connect(self._on_refresh_error)
+        self._refresh_worker.start()
 
         # 탭 위젯 생성
         self.tabs = QTabWidget()
@@ -181,12 +232,15 @@ class MainWindow(QMainWindow):
         
         right_layout.addWidget(btn_box)
 
-        # ───────── 타이머: 주기적 갱신 ─────────
-        self._timer = QTimer(self)
-        self._timer.setInterval(5000)
-        self._timer.timeout.connect(self.refresh_from_server)
-        self._timer.start()
+        # ───────── 타이머: 주기적 갱신 (워커가 대체하므로 UI-Only 타이머는 제거 또는 용도 변경) ─────────
+        # self._timer = QTimer(self)
+        # self._timer.setInterval(5000)
+        # self._timer.timeout.connect(self.refresh_from_server)
+        # self._timer.start()
 
+        # ───────── LPR 카메라 모니터링 활성화 (워커 시작 및 시그널 연결) ─────────
+        self._ensure_lpr_dialogs()
+        
         # 실시간 영상 갱신 타이머 (25fps 근사)
         self._video_timer = QTimer(self)
         self._video_timer.setInterval(40)
@@ -202,18 +256,16 @@ class MainWindow(QMainWindow):
         self._tx.set_lpr_ocr_ui_active(is_exit=False, active=True)
         self._tx.set_lpr_ocr_ui_active(is_exit=True, active=True)
 
-    # ───────── 데이터 로드 및 UI 반영 ─────────
-    def refresh_from_server(self) -> None:
-        try:
-            self._tx.refresh_from_server()
-        except Exception as e:  # noqa: BLE001
-            self.statusBar().showMessage(f"서버 통신 오류: {e}", 3000)
-            self.label_server.setText(f"서버 상태: 연결 실패 ({e})")
-            return
+    # ───────── 데이터 로드 및 UI 반영 (비동기 콜백) ─────────
+    @pyqtSlot(dict)
+    def _on_data_refreshed(self, data: dict) -> None:
+        """워커에서 데이터 갱신이 완료되었을 때 UI 를 업데이트한다."""
+        all_devices = data["all_devices"]
+        managed_ids = data["managed_ids"]
+        op_snapshot = data["dashboard_snapshot"]
+        det_snapshot = data["detection_snapshot"]
 
-        # 이 device_client 가 관리하는 devices 만 표시 (device_clients.devices_ids 기준)
-        managed_ids = self._tx.get_my_managed_device_ids()
-        all_devices = self._info.devices
+        # 1. 디바이스 필터링 및 요약/테이블 갱신
         if managed_ids:
             id_set = set(managed_ids)
             dev_by_id = {int(d.get("id")): d for d in all_devices if d.get("id") is not None}
@@ -224,16 +276,19 @@ class MainWindow(QMainWindow):
         self._update_summary(devices_to_show)
         self._update_devices_table(devices_to_show)
 
+        # 2. 게이트 로직 동기화 및 부가 정보 처리
         entry_gate_connected = False
         exit_gate_connected = False
         for dev in all_devices:
-            if (dev.get("device_guid") or "").strip() == ENTRY_GATE_GUID:
+            guid = (dev.get("device_guid") or "").strip()
+            if guid == ENTRY_GATE_GUID:
                 entry_gate_connected = bool(dev.get("is_connected"))
-            elif (dev.get("device_guid") or "").strip() == "DEV-GATE-2":
+            elif guid == "DEV-GATE-2":
                 exit_gate_connected = bool(dev.get("is_connected"))
 
-        operation_mode_on, free_slots, gate_sensor_state, gate_auto_state = self._tx.get_operation_mode_snapshot()
-        entry_detected, exit_detected = self._tx.get_entry_exit_detection_snapshot()
+        operation_mode_on, free_slots, gate_sensor_state, gate_auto_state = op_snapshot
+        entry_detected, exit_detected = det_snapshot
+
         self._device_mgr.sync_entry_gate_mode(
             entry_gate_connected,
             gate_sensor_state,
@@ -253,7 +308,18 @@ class MainWindow(QMainWindow):
             gate_auto_state,
             message_type="default",
         )
-        self.statusBar().showMessage("데이터 갱신 완료", 2000)
+        self.statusBar().showMessage("비동기 데이터 갱신 완료", 1000)
+
+    @pyqtSlot(str)
+    def _on_refresh_error(self, err_msg: str) -> None:
+        self.statusBar().showMessage(f"서버 동기화 오류: {err_msg}", 3000)
+        self.label_server.setText(f"서버 상태: 연결 실패 ({err_msg})")
+
+    def refresh_from_server(self) -> None:
+        """수동 새로고침 버튼 등을 위해 워커의 run 을 한 번 즉각 유도하거나 로직 유지 (현재는 워커가 5초마다 자동 수행)"""
+        if not self._refresh_worker.isRunning():
+            self._refresh_worker.start()
+        self.statusBar().showMessage("데이터 동기화 요청됨...", 1000)
 
     def open_gate_test_dialog(self) -> None:
         """입구 차단기(ESP32 보드1_1) 테스트용 팝업을 연다."""
