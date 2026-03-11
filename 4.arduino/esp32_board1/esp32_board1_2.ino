@@ -15,7 +15,7 @@
  #if 1
  const char* ssid     = "addinedu_201class_2-2.4G";
  const char* password = "201class2!";
- const char* serverIP = "192.168.0.137";  // 3.device_client PC
+ const char* serverIP = "192.168.0.149";  // 3.device_client PC
  #else
  const char* ssid     = "iptime_WiFiCE6D";
  const char* password = "!Tony6251@";

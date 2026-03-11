@@ -13,9 +13,9 @@ const char* ssid     = "addinedu_201class_2-2.4G";
 const char* password = "201class2!";
 
 #if 1
-char serverHostBuf[64] = "192.168.0.137";
-#else
 char serverHostBuf[64] = "192.168.0.149";
+#else
+char serverHostBuf[64] = "192.168.0.137";
 #endif
 
 uint16_t restPortNum = 7080;
