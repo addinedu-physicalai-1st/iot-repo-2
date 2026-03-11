@@ -44,6 +44,7 @@ class ParkingSlotBase(BaseModel):
     name: str
     level: Optional[str] = None
     sensor_connected: bool = False
+    sensor_guid: Optional[str] = None
 
 
 class ParkingSlotCreate(ParkingSlotBase):
@@ -77,6 +78,9 @@ class ResidentBase(BaseModel):
     name: str
     phone: str
     car_plate: str
+    password: str = "1234"
+    balance: int = 0
+    is_active: bool = True
 
 
 class ResidentCreate(ResidentBase):
@@ -173,3 +177,18 @@ class DeviceClientRead(DeviceClientBase):
     class Config:
         from_attributes = True
 
+class ParkingRecordBase(BaseModel):
+    license_plate: str
+    is_registered: bool = False
+    charge_amount: int = 0
+
+class ParkingRecordCreate(ParkingRecordBase):
+    entry_timestamp: Optional[datetime] = None
+
+class ParkingRecordRead(ParkingRecordBase):
+    record_id: int
+    entry_timestamp: datetime
+    exit_timestamp: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

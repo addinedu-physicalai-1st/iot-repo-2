@@ -88,10 +88,9 @@ const unsigned long RECONNECT_INTERVAL_MS = 3000;
 #define DEVICE_GUID "DEV-GATE-1"
 
 // 센서별 GUID(16자) + 영문 센서명(14자). 접속 시 서버 전송 → DB/리스트 연동
-#define DEVICE_COUNT 4
+#define DEVICE_COUNT 3
 static const struct { const char guid[17]; const char name[15]; } DEVICE_LIST[DEVICE_COUNT] = {
     { "ESP32-S1-ENTRY01", "EntryVehDetect" },  // 입구 차량 감지
-    //{ "ESP32-S2-EXIT01 ", "ExitVehDetect" },   // 출구 차량 감지
     { "ESP32-RFID-01   ", "RFIDReader" },
     { "ESP32-GATE-01   ", "GateServo" },
 };
@@ -250,7 +249,7 @@ void setup() {
 
     delay(INIT_SLEEP_MS);
     myServo.setPeriodHertz(50);
-    myServo.attach(13, 500, 2400);
+    myServo.attach(27, 500, 2400);
     myServo.write(0);
 
     delay(INIT_SLEEP_MS);
@@ -333,16 +332,31 @@ void loop() {
         }
     }
 
-    if (millis() - lastDetectionTime > DETECTION_DELAY) {
-        uint16_t l1 = 0, l2 = 0;
-        if (sensor1_ok && apds1.readAmbientLight(l1) && l1 > 0 && l1 <= LIGHT_THRESHOLD) {
-            char buf[16];
-            snprintf(buf, sizeof(buf), "L:%d", l1);
-            sendEvent(EV_ENTRY, "ENTRY", buf);
-            Serial.printf("ENTRY_DETECTED (Light: %d)\n", l1);
-            lastDetectionTime = millis();
+    static bool sensor1_was_detected = false;
+    if (millis() - lastDetectionTime > 150) {
+        uint16_t l1 = 0;
+        bool sensor1_now_detected = false;
+        
+        if (sensor1_ok && apds1.readAmbientLight(l1)) {
+            if (l1 > 0 && l1 <= LIGHT_THRESHOLD) {
+                sensor1_now_detected = true;
+            }
+            
+            if (sensor1_now_detected && !sensor1_was_detected) {
+                // 막힘 (새로운 감지)
+                sendEvent(EV_ENTRY, "ENTRY", "DETECTED");
+                Serial.printf("ENTRY_DETECTED (Light: %d)\n", l1);
+                sensor1_was_detected = true;
+            } 
+            else if (!sensor1_now_detected && sensor1_was_detected) {
+                // 해제 (차량 통과 완료)
+                sendEvent(EV_ENTRY, "ENTRY", "CLEAR");
+                Serial.printf("ENTRY_CLEAR (Light: %d)\n", l1);
+                sensor1_was_detected = false;
+            }
         }
-        delay(10);
+        lastDetectionTime = millis();
+    }
 
         #if 0
         if (sensor2_ok) {
@@ -356,8 +370,7 @@ void loop() {
             }
         }
         #endif
-    }
-
+    
     if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
         char uidStr[16] = {0};
         char siteStr[16] = {0};

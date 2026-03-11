@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Optional
 import cv2
 import numpy as np
@@ -10,6 +11,9 @@ from PyQt6.QtWidgets import (
     QLabel,
     QVBoxLayout,
     QTextEdit,
+    QPushButton,
+    QHBoxLayout,
+    QLineEdit,
 )
 
 from config import settings
@@ -28,10 +32,13 @@ class LprExitTestDialog(QDialog):
     def __init__(
         self,
         transmission_manager: TransmissionManager,
+        on_gate_open=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._tx = transmission_manager
+        self._on_gate_open = on_gate_open  # callable() → opens exit gate
+        self._last_frame_time: float = 0.0
 
         self.setWindowTitle("출구 LPR 카메라 테스트 (esp32_lpr_exit)")
         self.resize(680, 620)
@@ -55,6 +62,27 @@ class LprExitTestDialog(QDialog):
         self.result_edit.setMaximumHeight(140)
         self.result_edit.setPlaceholderText("인식된 번호가 여기 표시됩니다. (YOLO+PaddleOCR)")
         layout.addWidget(self.result_edit)
+
+        # 결제 금액 입력 + 결제 버튼
+        pay_row = QHBoxLayout()
+        self.label_pay = QLabel("결제 금액:")
+        self.edit_payment_amount = QLineEdit("0")
+        self.btn_pay = QPushButton("시뮬레이션: 요금 결제 완료")
+        self.btn_pay.clicked.connect(self._on_simulate_payment)
+        pay_row.addWidget(self.label_pay)
+        pay_row.addWidget(self.edit_payment_amount)
+        pay_row.addWidget(self.btn_pay)
+        layout.addLayout(pay_row)
+
+        self.btn_manual = QPushButton("수동 감지 시작 (3초간 OCR 활성화)")
+        self.btn_manual.clicked.connect(self._on_manual_trigger)
+        layout.addWidget(self.btn_manual)
+
+        self._last_plate: str | None = None
+        self._last_charge: int = 0
+        # After successful payment, ignore exit API for this plate for a while so OCR re-triggers don't ask for fee again.
+        self._exit_cooldown_until: float = 0.0
+        self._exit_cooldown_seconds: float = 55.0
 
         self._last_frame: Optional[np.ndarray] = None
         self._refresh_count = 0
@@ -86,15 +114,51 @@ class LprExitTestDialog(QDialog):
 
     def _on_lpr_result(self, line: str) -> None:
         self.result_edit.append(line)
+        if " | " in line:
+            parts = line.split(" | ")
+            if len(parts) >= 2:
+                plate = parts[1].strip()
+                now = time.time()
+                if now < self._exit_cooldown_until:
+                    self.result_edit.append("⏳ [COOLDOWN] 차량 통과 대기 중 — 재요금 요청 일시 중지")
+                    cursor = self.result_edit.textCursor()
+                    cursor.movePosition(cursor.MoveOperation.End)
+                    self.result_edit.setTextCursor(cursor)
+                    return
+                try:
+                    res = self._tx.record_exit(plate)
+                    msg = res.get("message", "")
+                    charge = int(res.get("charge", 0) or 0)
+                    self._last_plate = plate
+                    self._last_charge = charge
+                    self.edit_payment_amount.setText(str(charge))
+                    self.result_edit.append(f"📡 [SERVER-EXIT] {msg} (Charge: {charge} won)")
+                    if charge == 0:
+                        self.result_edit.append("🔓 [HARDWARE] Exit Gate Triggered (OPEN)")
+                        if callable(self._on_gate_open):
+                            self._on_gate_open()
+                        self._exit_cooldown_until = now + self._exit_cooldown_seconds
+                    else:
+                        self.result_edit.append("🔒 [HARDWARE] Exit Gate Remains CLOSED (Payment Required)")
+                except Exception as e:
+                    err_msg = str(e)
+                    if "404" in err_msg:
+                        self.result_edit.append("ℹ️ [EXIT] 활성 주차 세션 없음 (이미 출차 처리됨)")
+                        self._exit_cooldown_until = now + self._exit_cooldown_seconds
+                    else:
+                        self.result_edit.append(f"❌ [API-ERROR] {e}")
+
         cursor = self.result_edit.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         self.result_edit.setTextCursor(cursor)
 
     def _refresh_ui(self) -> None:
+        import time as _time
         frame = self._tx.get_lpr_exit_frame()
         if frame is not None:
             fno, img = frame
             if img is not None:
+                self._last_frame_time = _time.time()
                 # 출구 LPR 영상 보정: 좌우 반전 (번호판 글자 정상 방향)
                 img = cv2.flip(img, 1)
                 self._last_frame = img
@@ -114,6 +178,12 @@ class LprExitTestDialog(QDialog):
                 )
                 self.video_label.setPixmap(pix)
                 self.video_label.setText("")
+        else:
+            if self._last_frame_time > 0 and _time.time() - self._last_frame_time > 3.0:
+                self.video_label.clear()
+                self.video_label.setText("영상 없음 - 차량 대기 중...")
+                self._last_frame = None
+                self._last_frame_time = 0.0
 
         self._refresh_count += 1
         if (
@@ -124,9 +194,41 @@ class LprExitTestDialog(QDialog):
         ):
             self._lpr_worker.submit_frame(self._last_frame.copy())
 
-        has_frame = self._tx.has_recent_lpr_exit_frame(timeout_sec=5.0)
+        has_frame = self._tx.has_recent_lpr_exit_frame(timeout_sec=3.0)
         status = "영상 수신 중" if has_frame else "영상 없음 (UDP 7090 패킷 대기)"
         self.label_status.setText(f"상태: {status}")
+
+    def _on_simulate_payment(self) -> None:
+        if not self._last_plate:
+            self.result_edit.append("⚠ 인식된 차량 번호가 없습니다.")
+            return
+        
+        try:
+            amt_str = self.edit_payment_amount.text().strip()
+            amount = int(amt_str) if amt_str else self._last_charge
+            if amount <= 0:
+                self.result_edit.append("⚠ 결제 금액이 0원입니다.")
+                return
+
+            res = self._tx._api.clear_payment(self._last_plate, amount)
+            msg = res.get("message", "")
+            self.result_edit.append(f"💰 [PAYMENT] {msg}")
+            if res.get("ok"):
+                self.result_edit.append("🔓 [HARDWARE] Exit Gate Triggered (OPEN)")
+                if callable(self._on_gate_open):
+                    self._on_gate_open()
+                self._exit_cooldown_until = time.time() + self._exit_cooldown_seconds
+        except Exception as e:
+            # Check if it's an HTTP 404 from the API client (if using requests, it raises HTTPError)
+            err_msg = str(e)
+            if "404" in err_msg:
+                self.result_edit.append("❌ [PAY-ERROR] No active parking session found for this license plate. Please trigger Entry Gate first.")
+            else:
+                self.result_edit.append(f"❌ [PAY-ERROR] {e}")
+
+    def _on_manual_trigger(self) -> None:
+        self._tx.mark_lpr_apds_detected(is_exit=True)
+        self.result_edit.append("⚡ [MANUAL] OCR Triggered (3 seconds)")
 
     def closeEvent(self, event) -> None:
         self._tx.set_lpr_ocr_ui_active(is_exit=True, active=False)

@@ -71,6 +71,7 @@ class Esp32GateServer(threading.Thread):
         on_parking_event: Optional[Callable[[str, bool], None]] = None,
         on_gate_motor_event: Optional[Callable[[str, str, str], None]] = None,
         on_gate_event: Optional[Callable[[int, str, str], None]] = None,
+        on_rfid: Optional[Callable[[str], None]] = None,
     ) -> None:
         super().__init__(daemon=True)
         self._host = host
@@ -93,10 +94,8 @@ class Esp32GateServer(threading.Thread):
         self._stop_flag = threading.Event()
         self._current_ip: Optional[str] = None  # 마지막 연결 IP (호환용)
         self._gate_state_lock = threading.Lock()
-        self._gate_state: str = "UNKNOWN"
-        self._gate_state_source: str = ""
-        self._gate_state_detail: str = ""
-        self._gate_state_updated_at: float = 0.0
+        # GUID별 게이트 상태 관리를 위해 딕셔너리로 변경
+        self._gate_statuses: Dict[str, Dict[str, Any]] = {}
         self._pending_cmd: Optional[str] = None  # "OPEN" | "CLOSE"
         self._pending_target_guid: Optional[str] = None
         self._pending_result: Optional[Dict[str, Any]] = None
@@ -142,10 +141,12 @@ class Esp32GateServer(threading.Thread):
                 self._client_guids.get(a) == target_guid for a in self._clients
             )
         if not target_connected:
+            with self._gate_state_lock:
+                current_state = self._gate_statuses.get(target_guid, {}).get("state", "UNKNOWN")
             return {
                 "ok": False,
                 "command": cmd_name,
-                "state": self._gate_state,
+                "state": current_state,
                 "detail": "NO_CLIENT",
                 "message": f"게이트 보드({target_guid}) 미연결",
             }
@@ -163,11 +164,12 @@ class Esp32GateServer(threading.Thread):
             with self._gate_state_lock:
                 self._pending_cmd = None
                 self._pending_target_guid = None
+                current_state = self._gate_statuses.get(target_guid, {}).get("state", "UNKNOWN")
             self._on_log(f"[CMD] 게이트 {cmd_name} 전송 실패 (소켓 에러)")
             return {
                 "ok": False,
                 "command": cmd_name,
-                "state": self._gate_state,
+                "state": current_state,
                 "detail": "SEND_ERROR",
                 "message": "명령 전송 실패",
             }
@@ -176,10 +178,11 @@ class Esp32GateServer(threading.Thread):
             with self._gate_state_lock:
                 self._pending_cmd = None
                 self._pending_target_guid = None
+                current_state = self._gate_statuses.get(target_guid, {}).get("state", "UNKNOWN")
             return {
                 "ok": False,
                 "command": cmd_name,
-                "state": self._gate_state,
+                "state": current_state,
                 "detail": "TIMEOUT",
                 "message": f"응답 대기 타임아웃({wait_result_sec:.1f}s)",
             }
@@ -187,28 +190,32 @@ class Esp32GateServer(threading.Thread):
         with self._gate_state_lock:
             if self._pending_result is None:
                 self._pending_target_guid = None
+                current_state = self._gate_statuses.get(target_guid, {}).get("state", "UNKNOWN")
                 return {
                     "ok": False,
                     "command": cmd_name,
-                    "state": self._gate_state,
+                    "state": current_state,
                     "detail": "EMPTY_RESULT",
                     "message": "응답 수신 실패",
                 }
             return dict(self._pending_result)
 
-    def send_open_gate(self, wait_result_sec: float = 3.0) -> Dict[str, Any]:
-        return self._send_gate_command(TYPE_CMD_OPEN, "OPEN", wait_result_sec)
+    def send_open_gate(self, wait_result_sec: float = 3.0, target_guid: str = ENTRY_GATE_GUID) -> Dict[str, Any]:
+        return self._send_gate_command(TYPE_CMD_OPEN, "OPEN", wait_result_sec, target_guid)
 
-    def send_close_gate(self, wait_result_sec: float = 3.0) -> Dict[str, Any]:
-        return self._send_gate_command(TYPE_CMD_CLOSE, "CLOSE", wait_result_sec)
+    def send_close_gate(self, wait_result_sec: float = 3.0, target_guid: str = ENTRY_GATE_GUID) -> Dict[str, Any]:
+        return self._send_gate_command(TYPE_CMD_CLOSE, "CLOSE", wait_result_sec, target_guid)
 
-    def get_gate_motor_status(self) -> Dict[str, Any]:
+    def get_gate_motor_status(self, target_guid: str = ENTRY_GATE_GUID) -> Dict[str, Any]:
         with self._gate_state_lock:
+            status = self._gate_statuses.get(target_guid)
+            if status:
+                return dict(status)
             return {
-                "state": self._gate_state,
-                "source": self._gate_state_source,
-                "detail": self._gate_state_detail,
-                "updated_at": self._gate_state_updated_at,
+                "state": "UNKNOWN",
+                "source": "",
+                "detail": "",
+                "updated_at": 0.0,
             }
 
     def send_write_siteid(self, site_id: str) -> None:
@@ -256,10 +263,12 @@ class Esp32GateServer(threading.Thread):
         finally:
             with self._clients_lock:
                 guid = self._client_guids.get(addr)
+                print(f"[DEBUG-CONN-TERM] ESP32 보드 연결 해제 (addr={addr}, guid={guid!r})")
                 self._clients.pop(addr, None)
                 self._client_guids.pop(addr, None)
                 self._current_ip = next(iter(self._clients))[0] if self._clients else None
             try:
+                self._on_state_change(addr[0], False, guid)
                 conn.close()
             except Exception:
                 pass
@@ -278,6 +287,7 @@ class Esp32GateServer(threading.Thread):
                 try:
                     server.settimeout(1.0)
                     conn, addr = server.accept()
+                    print(f"[TCP-DEBUG] Accepted connection from {addr}")
                 except socket.timeout:
                     continue
                 t = threading.Thread(target=self._serve_client, args=(conn, addr), daemon=True)
@@ -353,10 +363,14 @@ class Esp32GateServer(threading.Thread):
                         with self._clients_lock:
                             client_guid = self._client_guids.get(addr, "")
                         with self._gate_state_lock:
-                            self._gate_state = motor_state
-                            self._gate_state_source = src
-                            self._gate_state_detail = ext
-                            self._gate_state_updated_at = time.time()
+                            # GUID별 상태 저장
+                            self._gate_statuses[client_guid] = {
+                                "state": motor_state,
+                                "source": src,
+                                "detail": ext,
+                                "updated_at": time.time(),
+                            }
+                            
                             expected_ev = 4 if self._pending_cmd == "OPEN" else 5 if self._pending_cmd == "CLOSE" else None
                             if expected_ev == ev and (
                                 self._pending_target_guid is None or self._pending_target_guid == client_guid
@@ -365,14 +379,15 @@ class Esp32GateServer(threading.Thread):
                                     "ok": True,
                                     "command": self._pending_cmd,
                                     "state": motor_state,
-                                    "source": src,
+                                    "source": client_guid, # Use GUID as source for consistency
                                     "detail": ext or "ACK_OK",
                                     "message": "명령 수행 완료",
                                 }
                                 self._pending_cmd = None
                                 self._pending_target_guid = None
                                 self._pending_event.set()
-                        self._on_gate_motor_event(motor_state, src, ext)
+                        if self._on_gate_motor_event:
+                            self._on_gate_motor_event(motor_state, client_guid, ext)
 
                     if src.startswith("SPOT_") and ext in ("OCCUPIED", "EMPTY"):
                         is_occupied = ext == "OCCUPIED"
@@ -385,6 +400,8 @@ class Esp32GateServer(threading.Thread):
                     uid = payload[1:17].decode("utf-8", errors="ignore").strip("\x00 ")
                     siteid = payload[17:32].decode("utf-8", errors="ignore").strip("\x00 ")
                     self._on_log(f"[RFID] mode={mode} UID={uid} SiteID={siteid}")
+                    if self.on_rfid:
+                        self.on_rfid(uid)
                     continue
 
                 # 4. 장비 목록 (연결별 버퍼 사용)
