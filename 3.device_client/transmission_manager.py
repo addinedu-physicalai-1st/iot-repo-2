@@ -616,9 +616,9 @@ class TransmissionManager:
         try:
             if self._lpr_exit_frame_queue.full():
                 self._lpr_exit_frame_queue.get_nowait()
-            if img is not None:
+            #if img is not None:
                 # 출구 LPR 보정: 180도 회전 (상하+좌우 모두 반전)
-                img = cv2.flip(img, -1)
+                #img = cv2.flip(img, -1)
             self._latest_lpr_exit_frame = (fno, img)  # non-consuming latest frame
             self._lpr_exit_frame_queue.put((fno, img))
         except Exception:
