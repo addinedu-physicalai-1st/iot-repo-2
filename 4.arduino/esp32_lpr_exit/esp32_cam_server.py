@@ -20,7 +20,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 IMG_DIR = os.path.join(SCRIPT_DIR, "img")
 
 
-# ver7/cam_udp_receive_test_gui 와 동일한 안정 수신: 헤더 3바이트 [f_no, p_no, checksum], 마지막 패킷은 JPEG 0xFFD9 포함 시 checksum 유효
 def udp_receiver_thread(log_signal):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
@@ -28,16 +27,17 @@ def udp_receiver_thread(log_signal):
     frames = {}
     last_frame_no = -1
     if log_signal:
-        log_signal.emit(f"[666] UDP 수신 시작 (포트 {UDP_PORT}, ver7 3바이트 헤더).")
+        log_signal.emit(f"[666] UDP 수신 시작 (포트 {UDP_PORT}). 스트림 들어오면 영상 표시.")
     while True:
         try:
             data, addr = sock.recvfrom(2048)
-            if len(data) < 4:
+            if len(data) < 5:
                 continue
             f_no = data[0]
             p_no = data[1]
-            received_checksum = data[2]
-            chunk = data[3:]
+            is_last = data[2]
+            received_checksum = data[3]
+            chunk = data[4:]
             if f_no < last_frame_no and (last_frame_no - f_no) < 200:
                 continue
             if f_no not in frames:
@@ -45,12 +45,12 @@ def udp_receiver_thread(log_signal):
                     del frames[min(frames.keys())]
                 frames[f_no] = {'chunks': {}, 'target_checksum': None}
             frames[f_no]['chunks'][p_no] = chunk
-            if chunk.find(b'\xff\xd9') != -1:
+            if is_last == 1:
                 frames[f_no]['target_checksum'] = received_checksum
             target = frames[f_no].get('target_checksum')
             if target is not None:
                 indices = sorted(frames[f_no]['chunks'].keys())
-                if len(indices) > 0 and indices[0] == 0 and len(indices) == indices[-1] + 1:
+                if len(indices) > 0 and indices[0] == 0 and indices[-1] == p_no and len(indices) == p_no + 1:
                     full_data = b"".join([frames[f_no]['chunks'][i] for i in indices])
                     calculated_checksum = sum(full_data) % 256
                     if calculated_checksum == target:

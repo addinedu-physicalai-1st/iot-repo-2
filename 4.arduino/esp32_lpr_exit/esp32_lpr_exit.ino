@@ -124,7 +124,6 @@ void restPollConfig() {
 // REST: /api/devices — 666에서는 사용하지 않음 (주석 처리)
 // void restPollDevices() { ... }
 
-// ver7 안정 형식: 헤더 3바이트 [frameNo, packetNo, checksum_or_0], 마지막 패킷에만 체크섬
 void sendImageUDP(uint8_t* imageData, size_t imageSize, uint8_t fno) {
     size_t remainingSize = imageSize;
     uint8_t packetNo = 0;
@@ -136,6 +135,7 @@ void sendImageUDP(uint8_t* imageData, size_t imageSize, uint8_t fno) {
         udp.beginPacket(serverHostBuf, udpPortNum);
         udp.write(fno);
         udp.write(packetNo);
+        udp.write(isLastPacket ? (uint8_t)1 : (uint8_t)0);
         udp.write(isLastPacket ? checksum : (uint8_t)0);
         udp.write(imageData, chunkSize);
         udp.endPacket();
@@ -194,7 +194,7 @@ void setup() {
     config.pixel_format = PIXFORMAT_JPEG;
     config.frame_size = FRAMESIZE_QVGA;
     config.jpeg_quality = 10;
-    config.fb_count = 3;  // ver7 안정 구조: 트리플 버퍼
+    config.fb_count = 2;
     config.grab_mode = CAMERA_GRAB_LATEST;
 
     if (esp_camera_init(&config) != ESP_OK) {

@@ -12,9 +12,9 @@ from config import settings
 """
 ESP32 카메라 ↔ 디바이스 PC UDP 프로토콜
 
-- ver7 안정 형식 (use_ver7_format=True, 출구 LPR 권장):
-  헤더 3바이트 [frameNo, packetNo, checksum_or_0] + JPEG 조각. 마지막 패킷에만 checksum, 수신은 JPEG 0xFFD9로 마지막 판별.
-- 구버전/555 혼합 (use_ver7_format=False): [f_no, p_no, is_last?, checksum?] 등 자동 감지.
+- esp32_wifi_webcam_ver7.ino 기준:
+  각 패킷에 [frameNo(1바이트), packetNo(1바이트), checksum(1바이트)] + JPEG 데이터 조각(최대 1024바이트)
+  마지막 패킷에서 checksum 은 전체 JPEG 바이트 합계의 8비트 합(sum % 256)
 """
 
 
@@ -24,19 +24,16 @@ class Esp32UdpReceiver:
         host: Optional[str] = None,
         port: Optional[int] = None,
         on_frame: Optional[Callable[[int, np.ndarray], None]] = None,
-        use_ver7_format: bool = False,
     ) -> None:
         """
         ESP32 UDP 수신기.
 
         - host/port 를 지정하지 않으면 config.settings 의 udp_listen_host/udp_listen_port 를 사용한다.
         - on_frame(f_no, img) 콜백으로 완성된 프레임을 전달한다.
-        - use_ver7_format=True: ver7/cam_udp_receive_test_gui 와 동일한 3바이트 헤더만 사용 (출구 LPR 안정 수신).
         """
         self.on_frame = on_frame
         self._host = host or settings.udp_listen_host
         self._port = port or settings.udp_listen_port
-        self._use_ver7_format = use_ver7_format
         self._sock: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -56,6 +53,9 @@ class Esp32UdpReceiver:
     def _loop(self) -> None:
         assert self._sock is not None
         # frames[f_no] = {"chunks": {p_no: bytes}, "target_checksum": Optional[int]}
+        # 헤더 포맷은 두 가지를 모두 지원한다.
+        # 1) 구버전(esp32_cam_udp 등): [f_no, p_no, checksum] + data
+        # 2) 555 버전(esp32_lpr_enter_555 등): [f_no, p_no, is_last, checksum] + data
         frames: dict[int, dict[str, object]] = {}
         last_frame_no = -1
 
@@ -68,24 +68,19 @@ class Esp32UdpReceiver:
                 f_no = data[0]
                 p_no = data[1]
 
-                if self._use_ver7_format:
-                    # ver7 안정 형식: 헤더 3바이트 [f_no, p_no, checksum_or_0], 마지막 패킷은 JPEG 0xFFD9 포함 시 checksum 유효
+                # 헤더 포맷 자동 감지
+                header_type = "legacy"  # 또는 "555"
+                is_last = 0
+                if len(data) >= 5 and data[2] in (0, 1):
+                    # 555 포맷: [f_no, p_no, is_last, checksum] + data
+                    header_type = "555"
+                    is_last = data[2]
+                    received_checksum = data[3]
+                    chunk = data[4:]
+                else:
+                    # 구버전 포맷: [f_no, p_no, checksum] + data
                     received_checksum = data[2]
                     chunk = data[3:]
-                    header_type = "legacy"
-                    is_last = 0
-                else:
-                    # 헤더 포맷 자동 감지
-                    header_type = "legacy"
-                    is_last = 0
-                    if len(data) >= 5 and data[2] in (0, 1):
-                        header_type = "555"
-                        is_last = data[2]
-                        received_checksum = data[3]
-                        chunk = data[4:]
-                    else:
-                        received_checksum = data[2]
-                        chunk = data[3:]
 
                 if f_no < last_frame_no and (last_frame_no - f_no) < 200:
                     continue
@@ -99,9 +94,11 @@ class Esp32UdpReceiver:
                 chunks: dict[int, bytes] = entry["chunks"]  # type: ignore[assignment]
                 chunks[p_no] = chunk
 
+                # 555 포맷: 마지막 패킷(is_last == 1)에서 checksum 저장
                 if header_type == "555" and is_last == 1:
                     entry["target_checksum"] = received_checksum
-                elif b"\xff\xd9" in chunk:
+                # 구버전 포맷: JPEG EOI(0xFFD9)를 포함한 패킷에서 checksum 저장
+                elif header_type == "legacy" and b"\xff\xd9" in chunk:
                     entry["target_checksum"] = received_checksum
 
                 target = entry.get("target_checksum")  # type: ignore[assignment]
