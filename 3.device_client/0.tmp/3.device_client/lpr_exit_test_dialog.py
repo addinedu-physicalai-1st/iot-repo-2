@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Optional
-
 import cv2
 import numpy as np
 from PyQt6.QtCore import QTimer, Qt, QThread
@@ -11,7 +10,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QVBoxLayout,
     QTextEdit,
-    QPushButton,
 )
 
 from config import settings
@@ -19,26 +17,23 @@ from transmission_manager import TransmissionManager
 from lpr_detector import LprRecognitionWorker
 
 
-class LprEnterTestDialog(QDialog):
+class LprExitTestDialog(QDialog):
     """
-    입구 LPR 카메라(esp32_lpr_enter) 테스트용 팝업.
+    출구 LPR 카메라(esp32_lpr_exit) 테스트용 팝업.
 
-    - UDP 7070 영상 표시 (실시간, 지연 없음)
+    - UDP 7090 영상 표시 (실시간, 지연 없음)
     - 번호판 인식: 별도 스레드에서 YOLO+OCR 실행, 인식 결과를 하단 에디터에 표시
     """
 
     def __init__(
         self,
         transmission_manager: TransmissionManager,
-        on_gate_open=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._tx = transmission_manager
-        self._on_gate_open = on_gate_open  # callable() → opens entry gate
-        self._last_frame_time: float = 0.0  # 마지막 프레임 수신 시각
 
-        self.setWindowTitle("입구 LPR 카메라 테스트 (esp32_lpr_enter)")
+        self.setWindowTitle("출구 LPR 카메라 테스트 (esp32_lpr_exit)")
         self.resize(680, 620)
 
         layout = QVBoxLayout()
@@ -46,7 +41,7 @@ class LprEnterTestDialog(QDialog):
         self.label_status = QLabel("상태: UDP 스트림 대기 중...")
         layout.addWidget(self.label_status)
 
-        layout.addWidget(QLabel("입구 LPR UDP 영상 (포트 7070):"))
+        layout.addWidget(QLabel("출구 LPR UDP 영상 (포트 7090):"))
         self.video_label = QLabel()
         self.video_label.setMinimumSize(320, 240)
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -61,14 +56,10 @@ class LprEnterTestDialog(QDialog):
         self.result_edit.setPlaceholderText("인식된 번호가 여기 표시됩니다. (YOLO+PaddleOCR)")
         layout.addWidget(self.result_edit)
 
-        self.btn_manual = QPushButton("수동 감지 시작 (3초간 OCR 활성화)")
-        self.btn_manual.clicked.connect(self._on_manual_trigger)
-        layout.addWidget(self.btn_manual)
-
         self._last_frame: Optional[np.ndarray] = None
         self._refresh_count = 0
 
-        # LPR 워커: 샘플 standalone과 동일 파라미터 (민감도 0.12, 쿨다운 3초, 1회 검출 시 OCR)
+        # LPR 워커: 샘플 standalone(esp32_cam_server_exit)과 동일 파라미터
         self._lpr_worker = LprRecognitionWorker(
             model_path=settings.lpr_plate_model_path,
             plate_conf_threshold=0.12,
@@ -91,38 +82,21 @@ class LprEnterTestDialog(QDialog):
         self._timer.start()
 
         self.setLayout(layout)
-        self._tx.set_lpr_ocr_ui_active(is_exit=False, active=True)
+        self._tx.set_lpr_ocr_ui_active(is_exit=True, active=True)
 
     def _on_lpr_result(self, line: str) -> None:
         self.result_edit.append(line)
-        #ts | final_text
-        if " | " in line:
-            parts = line.split(" | ")
-            if len(parts) >= 2:
-                plate = parts[1].strip()
-                try:
-                    res = self._tx.record_entry(plate)
-                    msg = res.get("message", "")
-                    self.result_edit.append(f"📡 [SERVER-ENTRY] {msg}")
-                    if res.get("gate") == "open" or res.get("ok"):
-                        self.result_edit.append("🔓 [HARDWARE] Entry Gate Triggered (OPEN)")
-                        if callable(self._on_gate_open):
-                            self._on_gate_open()
-                except Exception as e:
-                    self.result_edit.append(f"❌ [API-ERROR] {e}")
-
-        # 스크롤 맨 아래로
         cursor = self.result_edit.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         self.result_edit.setTextCursor(cursor)
 
     def _refresh_ui(self) -> None:
-        import time as _time
-        frame = self._tx.get_lpr_frame()
+        frame = self._tx.get_lpr_exit_frame()
         if frame is not None:
             fno, img = frame
             if img is not None:
-                self._last_frame_time = _time.time()
+                # 출구 LPR 영상 보정: 좌우 반전 (번호판 글자 정상 방향)
+                img = cv2.flip(img, 1)
                 self._last_frame = img
                 img = np.ascontiguousarray(img)
                 h, w, ch = img.shape
@@ -140,33 +114,22 @@ class LprEnterTestDialog(QDialog):
                 )
                 self.video_label.setPixmap(pix)
                 self.video_label.setText("")
-        else:
-            # 3초 이상 새 프레임이 없으면 화면 지움 (차량 이탈 후 잔상 방지)
-            if self._last_frame_time > 0 and _time.time() - self._last_frame_time > 3.0:
-                self.video_label.clear()
-                self.video_label.setText("영상 없음 - 차량 대기 중...")
-                self._last_frame = None
-                self._last_frame_time = 0.0
 
-        # 영상과 별도로, LPR에 가능한 자주 프레임 전달 (테스트 단계: 트리거 중에는 거의 매 프레임 시도)
         self._refresh_count += 1
         if (
             self._last_frame is not None
             and self._lpr_worker.is_available()
-            and self._tx.should_run_lpr_ocr(is_exit=False)
+            and (self._refresh_count % 5 == 0)
+            and self._tx.should_run_lpr_ocr(is_exit=True)
         ):
             self._lpr_worker.submit_frame(self._last_frame.copy())
 
-        has_frame = self._tx.has_recent_lpr_frame(timeout_sec=3.0)
-        status = "영상 수신 중" if has_frame else "영상 없음 (UDP 7070 패킷 대기)"
+        has_frame = self._tx.has_recent_lpr_exit_frame(timeout_sec=5.0)
+        status = "영상 수신 중" if has_frame else "영상 없음 (UDP 7090 패킷 대기)"
         self.label_status.setText(f"상태: {status}")
 
-    def _on_manual_trigger(self) -> None:
-        self._tx.mark_lpr_apds_detected(is_exit=False)
-        self.result_edit.append("⚡ [MANUAL] OCR Triggered (3 seconds)")
-
     def closeEvent(self, event) -> None:
-        self._tx.set_lpr_ocr_ui_active(is_exit=False, active=False)
+        self._tx.set_lpr_ocr_ui_active(is_exit=True, active=False)
         if self._lpr_worker.is_available():
             self._lpr_worker.stop()
             self._lpr_thread.quit()

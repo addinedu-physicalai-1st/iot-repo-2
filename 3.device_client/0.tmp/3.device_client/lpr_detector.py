@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
-from config import settings
 
 # 선택 의존: 없으면 인식 비활성화
 try:
@@ -39,47 +38,25 @@ except ImportError:
     _PADDLE_AVAILABLE = False
 
 
-def _extract_plate_text_from_ocr_result(ocr_results: Any) -> tuple[str, float]:
-    """
-    PaddleOCR 결과에서 번호판 문자만 추출하고 평균 신뢰도 계산.
-
-    - 원시 텍스트에서 [0-9가-힣] 만 남긴다.
-    - 별도의 번호판 패턴 필터링은 하지 않고, 글자가 나오면 그대로 사용한다.
-    """
+def _extract_plate_text_from_ocr_result(ocr_results: Any) -> str:
+    """PaddleOCR 결과에서 번호판 문자만 추출."""
     text_parts = []
-    conf_sum = 0.0
-    conf_count = 0
-
     if not ocr_results:
-        return "", 0.0
-
-    # PaddleOCR outputs are usually list of lines
+        return ""
     for line in ocr_results:
-        if not line: continue
-        for item in line:
-            # item format: [ [box], (text, confidence) ]
-            if isinstance(item, (list, tuple)) and len(item) >= 2:
-                content = item[1]
-                if isinstance(content, (list, tuple)) and len(content) >= 2:
-                    txt = str(content[0])
-                    conf = float(content[1])
-                    text_parts.append(txt)
-                    conf_sum += conf
-                    conf_count += 1
-
+        if hasattr(line, "rec_texts") and line.rec_texts:
+            text_parts.append("".join(line.rec_texts))
+        elif isinstance(line, dict) and "rec_texts" in line:
+            text_parts.append("".join(line["rec_texts"]))
+        elif isinstance(line, (list, tuple)):
+            for item in line:
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    txt = item[1]
+                    if isinstance(txt, tuple):
+                        txt = txt[0] if len(txt) > 0 else ""
+                    text_parts.append(str(txt))
     raw = "".join(text_parts)
-    clean_text = "".join(re.findall(r"[0-9가-힣]", raw))
-
-    # 디버그: PaddleOCR 원문/필터 결과/평균 신뢰도 출력
-    try:
-        print(f"[LPR-OCR-DEBUG] raw='{raw}' -> clean='{clean_text}' "
-              f"(avg_conf={conf_sum / conf_count if conf_count > 0 else 0.0:.2f}, "
-              f"parts={conf_count})")
-    except Exception:
-        pass
-
-    avg_conf = conf_sum / conf_count if conf_count > 0 else 0.0
-    return clean_text, avg_conf
+    return "".join(re.findall(r"[0-9가-힣]", raw))
 
 
 class LprRecognitionWorker(QObject):
@@ -89,10 +66,6 @@ class LprRecognitionWorker(QObject):
     """
 
     result_ready = pyqtSignal(str)  # 한 줄 결과 예: "2025-03-03 12:00:00 | 12가 3456"
-
-    # 클래스 레벨에서 모델 공유 (메모리 부족 방지)
-    _shared_models: dict[str, Any] = {}
-    _shared_lock = threading.Lock()
 
     def __init__(
         self,
@@ -111,74 +84,34 @@ class LprRecognitionWorker(QObject):
         self._pending_frame: Optional[Any] = None
         self._lock = threading.Lock()
         self._running = True
+        self._plate_model = None
+        self._ocr = None
         self._loaded = False
         self._load_error: Optional[str] = None
-        # 디버그용 번호판 크롭 이미지 저장 설정
-        self._debug_save_crops: bool = settings.lpr_debug_save_crops
-        self._debug_dir = Path(settings.lpr_debug_dir)
-        if self._debug_save_crops:
-            try:
-                self._debug_dir.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                self._debug_save_crops = False
-
-    @classmethod
-    def preload_models(cls) -> None:
-        """
-        백그라운드에서 YOLO + OCR 모델을 미리 로드하여
-        첫 LPR 팝업 호출 시 지연을 최소화한다.
-        """
-        try:
-            worker = cls(settings.lpr_plate_model_path)
-            if not worker.is_available():
-                print("[LPR] Preload skipped: YOLO / PaddleOCR not available.")
-                return
-            ok = worker.load_models()
-            if not ok:
-                print(f"[LPR] Preload failed: {worker._load_error}")
-        except Exception as e:
-            print(f"[LPR] Exception during preload: {e}")
 
     def is_available(self) -> bool:
         return _CV2_AVAILABLE and _YOLO_AVAILABLE and _PADDLE_AVAILABLE
 
     def load_models(self) -> bool:
-        """첫 프레임 전에 호출하거나 run_loop() 내부에서 lazy load."""
+        """첫 프레임 전에 호출하거나 run() 내부에서 lazy load."""
         if self._loaded:
             return True
         if not self.is_available():
             self._load_error = "ultralytics 또는 paddleocr 미설치"
             return False
-            
-        with self._shared_lock:
-            try:
-                model_key = str(Path(self._model_path).resolve())
-                
-                # YOLO 공유 로드
-                if "yolo" not in self._shared_models:
-                    self._shared_models["yolo"] = YOLO(model_key)
-                
-                # PaddleOCR 공유 로드
-                if "ocr" not in self._shared_models:
-                    self._shared_models["ocr"] = PaddleOCR(
-                        lang="korean",
-                        use_textline_orientation=True,
-                        enable_mkldnn=False,
-                    )
-                
-                self._loaded = True
-                return True
-            except Exception as e:
-                self._load_error = str(e)
-                return False
-
-    @property
-    def _plate_model(self):
-        return self._shared_models.get("yolo")
-
-    @property
-    def _ocr(self):
-        return self._shared_models.get("ocr")
+        try:
+            model_path = str(Path(self._model_path).resolve())
+            self._plate_model = YOLO(model_path)
+            self._ocr = PaddleOCR(
+                lang="korean",
+                use_textline_orientation=True,
+                enable_mkldnn=False,
+            )
+            self._loaded = True
+            return True
+        except Exception as e:
+            self._load_error = str(e)
+            return False
 
     def submit_frame(self, frame: Any) -> None:
         """UI 스레드에서 호출. 복사본을 넘기면 됨. 블로킹 없음."""
@@ -210,9 +143,6 @@ class LprRecognitionWorker(QObject):
             if frame is None:
                 time.sleep(0.02)
                 continue
-            
-            # [DEBUG] Frame received in OCR loop
-            print(f"[LPR-DEBUG] Worker received frame. Stability count: {plate_stability_counter}")
 
             if self._mirror_flip:
                 try:
@@ -227,8 +157,7 @@ class LprRecognitionWorker(QObject):
 
             # YOLO (동일 스레드에서 실행, 프레임은 이미 복사본)
             try:
-                with self._shared_lock:
-                    results = self._plate_model(frame, conf=self._plate_conf, verbose=False)
+                results = self._plate_model(frame, conf=self._plate_conf, verbose=False)
                 boxes = results[0].boxes.xyxy.cpu().numpy() if len(results) > 0 and results[0].boxes is not None else []
             except Exception:
                 boxes = []
@@ -241,8 +170,6 @@ class LprRecognitionWorker(QObject):
                 consecutive_empty = 0
                 if not is_cooldown:
                     plate_stability_counter += 1
-                    # [DEBUG] Box detected
-                    print(f"[LPR-DEBUG] YOLO detected {len(boxes)} box(es). Stability: {plate_stability_counter}")
 
             for box in boxes:
                 x1, y1, x2, y2 = map(int, box)
@@ -260,34 +187,19 @@ class LprRecognitionWorker(QObject):
                 h_c, w_c = cropped_plate.shape[:2]
                 scaled = cv2.resize(cropped_plate, (w_c * 4, h_c * 4), interpolation=cv2.INTER_CUBIC)
 
-                # 디버그 모드일 때 번호판 크롭 이미지 저장
-                if self._debug_save_crops:
-                    try:
-                        ts_ms = int(time.time() * 1000)
-                        fname = self._debug_dir / f"plate_{ts_ms}.jpg"
-                        cv2.imwrite(str(fname), scaled)
-                    except Exception:
-                        pass
-
-                # 테스트 단계: 안정도/쿨다운 조건을 완화해, 박스가 있으면 바로 OCR 시도
                 if plate_stability_counter >= self._stability_threshold and not is_cooldown:
                     last_trigger_time = current_time
                     plate_stability_counter = 0
                     try:
-                        with self._shared_lock:
-                            ocr_results = self._ocr.ocr(scaled)
-                        final_text, confidence = _extract_plate_text_from_ocr_result(ocr_results)
+                        ocr_results = self._ocr.ocr(scaled)
+                        final_text = _extract_plate_text_from_ocr_result(ocr_results)
                         last_ocr_text = final_text
-
-                        from datetime import datetime
-                        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-                        # 예전 버전처럼: 글자만 나오면 일단 그대로 표시
-                        if final_text:
+                        if len(final_text) >= 5:
+                            from datetime import datetime
+                            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             self.result_ready.emit(f"{ts} | {final_text}")
-                        else:
-                            # 글자가 전혀 없는 경우에만 간단한 디버그 메시지
-                            self.result_ready.emit(f"{ts} | <no text>")
+                        elif final_text:
+                            self.result_ready.emit(f"[미완성] {final_text}")
                     except Exception as ex:
                         self.result_ready.emit(f"[OCR 오류] {ex}")
                 break  # 한 프레임에서 첫 박스만 OCR

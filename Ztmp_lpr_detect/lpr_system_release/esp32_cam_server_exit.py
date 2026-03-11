@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 
-UDP_PORT = 7090  # 출구 LPR (입구는 7070)
+UDP_PORT = 7070  # 출구 LPR (입구는 7070)
 frame_queue = Queue(maxsize=5)
 ocr_frame_queue = Queue(maxsize=1)  # 최신 1프레임만 OCR용으로 전달
 

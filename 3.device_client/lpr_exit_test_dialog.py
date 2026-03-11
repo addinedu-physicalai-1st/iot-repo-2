@@ -187,7 +187,6 @@ class LprExitTestDialog(QDialog):
         if (
             self._last_frame is not None
             and self._lpr_worker.is_available()
-            and (self._refresh_count % 5 == 0)
             and self._tx.should_run_lpr_ocr(is_exit=True)
         ):
             self._lpr_worker.submit_frame(self._last_frame.copy())

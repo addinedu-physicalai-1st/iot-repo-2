@@ -110,29 +110,6 @@ class DeviceClientSettings:
             p = (BASE_DIR / raw).resolve()
         return str(p)
 
-    # ───────── LPR 디버그 설정 (번호판 크롭 이미지 저장) ─────────
-    @property
-    def lpr_debug_save_crops(self) -> bool:
-        """
-        번호판 디버깅용으로 YOLO가 잡은 번호판 크롭 이미지를 파일로 저장할지 여부.
-        - 0 (기본): 저장 안 함
-        - 1: 저장 (성능에 영향 있을 수 있음)
-        """
-        return os.getenv("LPR_DEBUG_SAVE_CROPS", "0") == "1"
-
-    @property
-    def lpr_debug_dir(self) -> str:
-        """
-        번호판 크롭 이미지를 저장할 디렉터리 경로.
-        기본: 3.device_client/lpr_debug
-        """
-        default = (BASE_DIR / "lpr_debug").resolve()
-        raw = os.getenv("LPR_DEBUG_DIR", str(default))
-        p = Path(raw)
-        if not p.is_absolute():
-            p = (BASE_DIR / raw).resolve()
-        return str(p)
-
 
 settings = DeviceClientSettings()
 

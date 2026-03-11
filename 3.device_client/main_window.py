@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -17,6 +17,11 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QImage, QPixmap
 
+import cv2
+import numpy as np
+from pathlib import Path
+from datetime import datetime
+
 from architect_manager import ArchitectManager
 from device_manager import DeviceManager, ENTRY_GATE_GUID
 from info_manager import InfoManager
@@ -27,6 +32,8 @@ from parking_guide_test_dialog import ParkingGuideTestDialog
 from lpr_enter_test_dialog import LprEnterTestDialog
 from lpr_exit_test_dialog import LprExitTestDialog
 from rfid_management_tab import RfidManagementTab
+from config import settings
+from lpr_detector import _extract_plate_text_from_ocr_result
 
 from PyQt6.QtWidgets import QTabWidget
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
@@ -108,6 +115,11 @@ class MainWindow(QMainWindow):
         self._lpr_dialog: LprEnterTestDialog | None = None
         self._lpr_exit_dialog: LprExitTestDialog | None = None
 
+        # 임시 이미지 저장 & OCR 테스트용 상태
+        self._last_entry_manual_image: Optional[Path] = None
+        self._manual_yolo = None
+        self._manual_ocr = None
+
         self.lpr_popup_signal.connect(self._handle_lpr_popup)
         self._device_mgr.on_lpr_popup = self._emit_lpr_popup
 
@@ -171,7 +183,24 @@ class MainWindow(QMainWindow):
         self.video_entry.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.video_entry.setStyleSheet("background-color: #222; border: 1px solid #444;")
         entry_cam_layout.addWidget(self.video_entry)
-        
+
+        # 입구 임시 이미지 저장 / OCR 테스트 버튼들
+        entry_btn_row = QHBoxLayout()
+        self.btn_entry_save_image = QPushButton("임시 이미지 저장")
+        self.btn_entry_save_image.clicked.connect(self._on_entry_save_image)
+        entry_btn_row.addWidget(self.btn_entry_save_image)
+
+        self.btn_entry_ocr_test = QPushButton("저장 이미지 OCR 테스트")
+        self.btn_entry_ocr_test.clicked.connect(self._on_entry_ocr_test)
+        entry_btn_row.addWidget(self.btn_entry_ocr_test)
+
+        # 고정 테스트 이미지용 OCR 버튼 (예: Screenshot_20260311_212956.png)
+        self.btn_entry_ocr_test2 = QPushButton("저장 OCR 이미지 테스트2")
+        self.btn_entry_ocr_test2.clicked.connect(self._on_entry_ocr_test2)
+        entry_btn_row.addWidget(self.btn_entry_ocr_test2)
+
+        entry_cam_layout.addLayout(entry_btn_row)
+
         self.log_entry = QTextEdit()
         self.log_entry.setReadOnly(True)
         self.log_entry.setMaximumHeight(80)
@@ -363,6 +392,160 @@ class MainWindow(QMainWindow):
                 parent=self,
             )
             self._lpr_exit_dialog._lpr_worker.result_ready.connect(lambda msg: self.log_exit.append(msg))
+
+    def _on_entry_save_image(self) -> None:
+        """현재 입구 LPR 최신 프레임을 임시 파일로 저장."""
+        try:
+            frame_data = self._tx.get_latest_lpr_frame(is_exit=False)
+        except Exception:
+            frame_data = None
+
+        if not frame_data or frame_data[1] is None:
+            self.log_entry.append("[TMP] 저장할 입구 영상 프레임이 없습니다.")
+            return
+
+        _, img = frame_data
+        try:
+            img_bgr = img
+            if img_bgr is None or not isinstance(img_bgr, np.ndarray):
+                self.log_entry.append("[TMP] 프레임 형식이 올바르지 않습니다.")
+                return
+
+            debug_dir = Path(__file__).resolve().parent / "lpr_debug"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            fname = debug_dir / f"manual_entry_{ts}.jpg"
+            cv2.imwrite(str(fname), img_bgr)
+            self._last_entry_manual_image = fname
+            self.log_entry.append(f"[TMP] 임시 이미지 저장: {fname.name}")
+        except Exception as e:
+            self.log_entry.append(f"[TMP] 이미지 저장 오류: {e}")
+
+    def _ensure_manual_ocr_models(self) -> bool:
+        """임시 OCR 테스트용 YOLO / PaddleOCR 초기화."""
+        try:
+            if self._manual_yolo is None or self._manual_ocr is None:
+                from ultralytics import YOLO
+                from paddleocr import PaddleOCR
+
+                model_path = str(Path(settings.lpr_plate_model_path).resolve())
+                self._manual_yolo = YOLO(model_path)
+                self._manual_ocr = PaddleOCR(
+                    lang="korean",
+                    use_textline_orientation=True,
+                    enable_mkldnn=False,
+                )
+            return True
+        except Exception as e:
+            self.log_entry.append(f"[TMP] OCR 모델 로드 오류: {e}")
+            return False
+
+    def _on_entry_ocr_test(self) -> None:
+        """마지막으로 저장한 임시 입구 이미지를 이용해 OCR 테스트."""
+        if not self._last_entry_manual_image or not self._last_entry_manual_image.is_file():
+            self.log_entry.append("[TMP] 저장된 임시 이미지가 없습니다. 먼저 '임시 이미지 저장'을 눌러 주세요.")
+            return
+
+        if not self._ensure_manual_ocr_models():
+            return
+
+        try:
+            img = cv2.imread(str(self._last_entry_manual_image))
+            if img is None:
+                self.log_entry.append("[TMP] 임시 이미지를 불러오지 못했습니다.")
+                return
+
+            h, w = img.shape[:2]
+            results = self._manual_yolo(img, conf=0.12, verbose=False)
+            boxes = results[0].boxes.xyxy.cpu().numpy() if len(results) > 0 and results[0].boxes is not None else []
+
+            if len(boxes) == 0:
+                self.log_entry.append("[TMP] YOLO 번호판 박스를 찾지 못했습니다.")
+                return
+
+            x1, y1, x2, y2 = map(int, boxes[0])
+            pad_y = max(5, int((y2 - y1) * 0.15))
+            pad_x = max(5, int((x2 - x1) * 0.05))
+            y1_pad = max(0, y1 - pad_y)
+            y2_pad = min(h, y2 + pad_y)
+            x1_pad = max(0, x1 - pad_x)
+            x2_pad = min(w, x2 + pad_x)
+            cropped = img[y1_pad:y2_pad, x1_pad:x2_pad]
+            if cropped.size == 0:
+                self.log_entry.append("[TMP] 크롭된 번호판 영역이 비어 있습니다.")
+                return
+
+            ch, cw = cropped.shape[:2]
+            scaled = cv2.resize(cropped, (cw * 4, ch * 4), interpolation=cv2.INTER_CUBIC)
+
+            ocr_results = self._manual_ocr.ocr(scaled)
+            final_text, confidence = _extract_plate_text_from_ocr_result(ocr_results)
+
+            if final_text:
+                self.log_entry.append(f"[TMP] 저장 이미지 OCR → '{final_text}' (conf≈{confidence:.2f})")
+            else:
+                self.log_entry.append(f"[TMP] 저장 이미지 OCR → <no text> (conf≈{confidence:.2f})")
+        except Exception as e:
+            self.log_entry.append(f"[TMP] OCR 테스트 오류: {e}")
+
+    def _on_entry_ocr_test2(self) -> None:
+        """고정된 테스트 이미지(Screenshot_20260311_212956.png)를 이용해 OCR 테스트."""
+        # 프로젝트 루트 기준 경로: 3.device_client/lpr_debug/Screenshot_20260311_212956.png
+        fixed_path = (
+            Path(__file__).resolve().parent
+            / "lpr_debug"
+            / "Screenshot_20260311_212956.png"
+        )
+
+        if not fixed_path.is_file():
+            self.log_entry.append(f"[TMP2] 테스트 이미지가 없습니다: {fixed_path.name}")
+            return
+
+        if not self._ensure_manual_ocr_models():
+            return
+
+        try:
+            img = cv2.imread(str(fixed_path))
+            if img is None:
+                self.log_entry.append("[TMP2] 테스트 이미지를 불러오지 못했습니다.")
+                return
+
+            h, w = img.shape[:2]
+            results = self._manual_yolo(img, conf=0.12, verbose=False)
+            boxes = results[0].boxes.xyxy.cpu().numpy() if len(results) > 0 and results[0].boxes is not None else []
+
+            if len(boxes) == 0:
+                self.log_entry.append("[TMP2] YOLO 번호판 박스를 찾지 못했습니다.")
+                return
+
+            x1, y1, x2, y2 = map(int, boxes[0])
+            pad_y = max(5, int((y2 - y1) * 0.15))
+            pad_x = max(5, int((x2 - x1) * 0.05))
+            y1_pad = max(0, y1 - pad_y)
+            y2_pad = min(h, y2 + pad_y)
+            x1_pad = max(0, x1 - pad_x)
+            x2_pad = min(w, x2 + pad_x)
+            cropped = img[y1_pad:y2_pad, x1_pad:x2_pad]
+            if cropped.size == 0:
+                self.log_entry.append("[TMP2] 크롭된 번호판 영역이 비어 있습니다.")
+                return
+
+            ch, cw = cropped.shape[:2]
+            scaled = cv2.resize(cropped, (cw * 4, ch * 4), interpolation=cv2.INTER_CUBIC)
+
+            ocr_results = self._manual_ocr.ocr(scaled)
+            final_text, confidence = _extract_plate_text_from_ocr_result(ocr_results)
+
+            if final_text:
+                self.log_entry.append(
+                    f"[TMP2] Screenshot OCR → '{final_text}' (conf≈{confidence:.2f})"
+                )
+            else:
+                self.log_entry.append(
+                    f"[TMP2] Screenshot OCR → <no text> (conf≈{confidence:.2f})"
+                )
+        except Exception as e:
+            self.log_entry.append(f"[TMP2] OCR 테스트2 오류: {e}")
 
     def open_lpr_enter_test_dialog(self) -> None:
         """입구 LPR 카메라(esp32_lpr_enter) 테스트용 팝업을 연다."""
