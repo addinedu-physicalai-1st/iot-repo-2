@@ -46,10 +46,15 @@ class DeviceManager:
         self._entry_gate_pending_close: bool = False
         self._exit_gate_pending_close: bool = False
         self._last_operation_mode_on: bool = True
-        self._last_gate_sensor_state: int = 1
+        self._last_gate_sensor_state: int = 1  # 서버 기준 최근 gate_sensor_state
+        self._prev_gate_sensor_state: int = 1  # 직전 사이클의 gate_sensor_state
         self._last_gate_auto_state: int = 0
         self._last_entry_sensor_detected: bool = False
         self._last_exit_sensor_detected: bool = False
+        # 출구 RFID 카드 최근 스캔 정보 (케이스 4: 비등록 + RFID 예외 처리용)
+        self._last_rfid_uid: str | None = None
+        self._last_rfid_siteid: str | None = None
+        self._last_rfid_at: float = 0.0
 
     def start(self) -> None:
         """
@@ -67,6 +72,7 @@ class DeviceManager:
                 on_parking_event=self._on_parking_event,
                 on_gate_motor_event=self._on_gate_motor_event,
                 on_gate_event=self._on_gate_event,
+                on_rfid=self._on_rfid,
             )
             self._gate_server.start()
 
@@ -216,6 +222,23 @@ class DeviceManager:
             if ev == 2:
                 self._pending_exit_trigger = True
 
+    def _on_rfid(self, mode: int, uid: str, siteid: str) -> None:
+        """
+        ESP32 보드1 에서 RFID 카드가 스캔됐을 때 호출된다.
+        - mode: 0=카드 읽기, 2=SiteID 쓰기 완료 등의 제어 모드
+        - uid:  카드 UID (hex 문자열)
+        - siteid: 카드에 저장된 SiteID (optional)
+        출구 LPR 결과와 근접한 시점(예: 10초 이내)에 exit-event 를 호출할 때
+        rfid_card_uid 로 함께 전달한다.
+        """
+        now = time.time()
+        self._last_rfid_uid = uid.strip() or None
+        self._last_rfid_siteid = siteid.strip() or None
+        self._last_rfid_at = now
+        self._append_gate_log(
+            f"[RFID] mode={mode} uid={self._last_rfid_uid} siteid={self._last_rfid_siteid}"
+        )
+
     # ───────── 입구 LPR 번호판 콜백 (케이스 1: 등록 차량 입차 기록) ─────────
     def on_entry_lpr_plate(self, plate: str) -> None:
         """
@@ -262,11 +285,19 @@ class DeviceManager:
             return
         self._pending_exit_trigger = False
         try:
-            rec = self._tx.send_parking_exit_event(plate, exit_img_path=None, rfid_card_uid=None)
+            # 출구 LPR 인식 시점과 근접하게 스캔된 RFID UID 가 있으면 함께 전송
+            rfid_uid: str | None = None
+            if self._last_rfid_uid and (time.time() - self._last_rfid_at) <= 10.0:
+                rfid_uid = self._last_rfid_uid
+            rec = self._tx.send_parking_exit_event(
+                plate,
+                exit_img_path=None,
+                rfid_card_uid=rfid_uid,
+            )
             is_reg = int(rec.get("is_registered") or 0)
             self._append_gate_log(
                 f"[EXIT] plate={plate} record_id={rec.get('record_id')} is_registered={is_reg} "
-                f"charge={rec.get('charge_amount')}"
+                f"charge={rec.get('charge_amount')} rfid={rfid_uid or '-'}"
             )
             # ----- 케이스 3: 등록 차량 + 자동 모드일 때 출구 게이트 자동 개방 -----
             if (
@@ -331,6 +362,7 @@ class DeviceManager:
         # 운영 모드는 현재 대시보드에서만 OFF로 바꿀 수 있지만,
         # TransmissionManager 에서는 별도 플래그로 관리하므로 우선 항상 ON 으로 본다.
         self._last_operation_mode_on = True
+        self._prev_gate_sensor_state = self._last_gate_sensor_state
         self._last_gate_sensor_state = int(gate_sensor_state)
         self._last_entry_sensor_detected = bool(entry_sensor_detected)
         self._last_exit_sensor_detected = bool(exit_sensor_detected)
@@ -348,6 +380,16 @@ class DeviceManager:
             desired_motor_state = "CLOSED" if target_state == 1 else "OPEN"
             desired_auto_state = 2 if target_state == 1 else 1
         elif target_state == 3:
+            # ---- 수동(1/2) → 자동(3) 전환 시, 기본 닫힘 한 번 수행 ----
+            if self._prev_gate_sensor_state in (1, 2) and self._last_gate_sensor_state == 3:
+                self._append_gate_log("[GATE] 수동→자동 전환: 기본 닫힘 수행")
+                result = self.close_gate()
+                if not result.get("ok"):
+                    self._append_gate_log(
+                        f"[GATE] 기본 닫힘 실패 state={result.get('state')} detail={result.get('detail')}"
+                    )
+                # 이후 자동 모드에서는 LPR 플로우를 통해서만 다시 열린다.
+
             # 자동 모드(3)에서는 여기서 더 이상 감지 센서만으로 자동 개폐하지 않는다.
             # 대신 입출차 플로우(on_entry_lpr_plate/on_exit_lpr_plate)에서 open_gate 를 호출하고,
             # 여기서는 "언제 닫을지"만 판단한다.

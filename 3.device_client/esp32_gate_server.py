@@ -71,6 +71,7 @@ class Esp32GateServer(threading.Thread):
         on_parking_event: Optional[Callable[[str, bool], None]] = None,
         on_gate_motor_event: Optional[Callable[[str, str, str], None]] = None,
         on_gate_event: Optional[Callable[[int, str, str], None]] = None,
+        on_rfid: Optional[Callable[[int, str, str], None]] = None,
     ) -> None:
         super().__init__(daemon=True)
         self._host = host
@@ -86,6 +87,8 @@ class Esp32GateServer(threading.Thread):
         self._on_gate_motor_event = on_gate_motor_event or (lambda state, src, detail: None)
         # 원본 게이트 이벤트(ev/src/ext) 전달 (APDS 감지 플래그 제어용)
         self._on_gate_event = on_gate_event or (lambda ev, src, ext: None)
+        # RFID 이벤트(mode, uid, siteid) 전달 (출구 RFID 예외 처리용)
+        self._on_rfid = on_rfid or (lambda mode, uid, siteid: None)
 
         self._clients: Dict[tuple, socket.socket] = {}  # (ip, port) -> conn
         self._client_guids: Dict[tuple, str] = {}      # addr -> device_guid (DEV-GATE-1, DEV-GATE-2 등)
@@ -385,6 +388,11 @@ class Esp32GateServer(threading.Thread):
                     uid = payload[1:17].decode("utf-8", errors="ignore").strip("\x00 ")
                     siteid = payload[17:32].decode("utf-8", errors="ignore").strip("\x00 ")
                     self._on_log(f"[RFID] mode={mode} UID={uid} SiteID={siteid}")
+                    try:
+                        self._on_rfid(int(mode), uid, siteid)
+                    except Exception:
+                        # RFID 콜백 에러는 전체 연결에 영향 주지 않도록 무시
+                        pass
                     continue
 
                 # 4. 장비 목록 (연결별 버퍼 사용)
