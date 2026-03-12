@@ -299,7 +299,7 @@ ON DUPLICATE KEY UPDATE updated_at = NOW();
 -- 입주민 샘플 데이터
 INSERT INTO residents (unit_number, name, phone, car_plate, created_at, updated_at)
 VALUES
-  ('101-101', '홍길동',    '010-1111-1111', '12가1234', NOW(), NOW()),
+  ('101-101', '홍길동',    '010-1111-1111', '872서9102', NOW(), NOW()),
   ('101-102', '김철수',    '010-2222-2222', '23나2345', NOW(), NOW()),
   ('102-201', '이영희',    '010-3333-3333', '34다3456', NOW(), NOW()),
   ('102-202', '박민수',    '010-4444-4444', '45라4567', NOW(), NOW()),
@@ -314,7 +314,7 @@ ON DUPLICATE KEY UPDATE updated_at = NOW();
 -- RFID 카드 샘플 데이터 (입주민과 일부 매핑)
 INSERT INTO rfid_cards (card_uid, resident_id, is_active, description, created_at, updated_at)
 VALUES
-  ('RFID0001', 1, 1, '101-101 차량', NOW(), NOW()),
+  ('0726d306', 1, 1, '101-101 차량', NOW(), NOW()),
   ('RFID0002', 2, 1, '101-102 차량', NOW(), NOW()),
   ('RFID0003', 3, 1, '102-201 차량', NOW(), NOW()),
   ('RFID0004', 4, 1, '102-202 차량', NOW(), NOW()),

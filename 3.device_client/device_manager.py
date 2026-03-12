@@ -42,8 +42,9 @@ class DeviceManager:
         # 입구/출구 플로우용 플래그 (케이스 1/3: LPR 번호판을 한 번만 서버에 보낼 때 사용)
         self._pending_entry_trigger: bool = False
         self._pending_exit_trigger: bool = False
-        # 입구 자동 모드용 상태 (등록 차량 입차 후 차량 통과 시 닫기)
+        # 입구/출구 자동 모드용 상태 (등록 차량 통과 후 닫기)
         self._entry_gate_pending_close: bool = False
+        self._exit_gate_pending_close: bool = False
         self._last_operation_mode_on: bool = True
         self._last_gate_sensor_state: int = 1
         self._last_gate_auto_state: int = 0
@@ -262,10 +263,28 @@ class DeviceManager:
         self._pending_exit_trigger = False
         try:
             rec = self._tx.send_parking_exit_event(plate, exit_img_path=None, rfid_card_uid=None)
+            is_reg = int(rec.get("is_registered") or 0)
             self._append_gate_log(
-                f"[EXIT] plate={plate} record_id={rec.get('record_id')} is_registered={rec.get('is_registered')} "
+                f"[EXIT] plate={plate} record_id={rec.get('record_id')} is_registered={is_reg} "
                 f"charge={rec.get('charge_amount')}"
             )
+            # ----- 케이스 3: 등록 차량 + 자동 모드일 때 출구 게이트 자동 개방 -----
+            if (
+                is_reg == 1
+                and self._last_operation_mode_on
+                and int(self._last_gate_sensor_state) == 3  # 3: 자동 모드
+            ):
+                self._append_gate_log(
+                    "[EXIT] 등록 차량 + 자동 모드 → 출구 게이트 자동 개방 시도"
+                )
+                result = self.open_gate()
+                if result.get("ok"):
+                    # 차량이 통과한 뒤(exit_sensor_detected=False로 떨어질 때) 자동으로 닫기
+                    self._exit_gate_pending_close = True
+                else:
+                    self._append_gate_log(
+                        f"[EXIT] open_gate 실패 state={result.get('state')} detail={result.get('detail')}"
+                    )
         except Exception as exc:  # noqa: BLE001
             self._append_gate_log(f"[EXIT] parking_exit_event 실패 plate={plate} ({exc})")
 
@@ -309,7 +328,9 @@ class DeviceManager:
           게이트를 여닫고, 여기서는 자동 닫힘 조건만 처리한다.
         """
         # 최근 스냅샷 저장 (입출차 플로우에서 참조)
-        self._last_operation_mode_on = True  # 운영 모드는 2.client 대시보드에서만 변경, 단순 ON 기준
+        # 운영 모드는 현재 대시보드에서만 OFF로 바꿀 수 있지만,
+        # TransmissionManager 에서는 별도 플래그로 관리하므로 우선 항상 ON 으로 본다.
+        self._last_operation_mode_on = True
         self._last_gate_sensor_state = int(gate_sensor_state)
         self._last_entry_sensor_detected = bool(entry_sensor_detected)
         self._last_exit_sensor_detected = bool(exit_sensor_detected)
@@ -337,6 +358,12 @@ class DeviceManager:
                 result = self.close_gate()
                 if result.get("ok"):
                     self._entry_gate_pending_close = False
+            # 출구 게이트도 동일하게, 차량 통과(exit_sensor_detected=False) 시 자동 닫기
+            if self._exit_gate_pending_close and not exit_sensor_detected:
+                self._append_gate_log("[EXIT] 차량 통과 감지 → 게이트 자동 닫힘 시도")
+                result = self.close_gate()
+                if result.get("ok"):
+                    self._exit_gate_pending_close = False
             # 자동 모드에서는 여기서 추가 open/close 명령을 보내지 않는다.
             return
         else:
