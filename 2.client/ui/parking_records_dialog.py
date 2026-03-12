@@ -215,20 +215,20 @@ class ParkingRecordsDialog(QDialog):
         for url, label in ((entry_url, self._label_entry_img), (exit_url, self._label_exit_img)):
             if not url:
                 label.setText("이미지 없음")
-                label.setPixmap(None)
+                label.clear()
                 continue
             try:
                 resp = httpx.get(url, timeout=3.0)
                 if resp.status_code != 200:
                     label.setText("이미지 없음")
-                    label.setPixmap(None)
+                    label.clear()
                     continue
                 data = resp.content
                 from PyQt6.QtGui import QPixmap
                 pix = QPixmap()
                 if not pix.loadFromData(data):
                     label.setText("이미지 로드 실패")
-                    label.setPixmap(None)
+                    label.clear()
                     continue
                 label.setPixmap(
                     pix.scaled(
@@ -240,7 +240,7 @@ class ParkingRecordsDialog(QDialog):
                 )
             except Exception:
                 label.setText("이미지 오류")
-                label.setPixmap(None)
+                label.clear()
 
     # ── 선택 행 수정 다이얼로그 ─────────────────────────────
     def _edit_selected(self) -> None:

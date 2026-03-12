@@ -198,6 +198,21 @@ class ParkingRecordRead(ParkingRecordBase):
         from_attributes = True
 
 
+class ParkingEntryEvent(BaseModel):
+    """입구 LPR/트리거에서 서버로 보내는 입차 이벤트."""
+
+    license_plate: str
+    entry_img_path: Optional[str] = None  # lpr_record/entry 아래 파일명
+
+
+class ParkingExitEvent(BaseModel):
+    """출구 LPR/트리거에서 서버로 보내는 출차 이벤트."""
+
+    license_plate: str
+    exit_img_path: Optional[str] = None  # lpr_record/exit 아래 파일명
+    rfid_card_uid: Optional[str] = None  # 출구에서 RFID가 찍힌 경우
+
+
 class ParkingRecordUpdate(BaseModel):
     """입·출차 기록 일부 수정용 스키마 (운영자 번호판/요금/등록 여부 수정 등)."""
 

@@ -39,6 +39,16 @@ class DeviceManager:
         self._last_manual_gate_cmd_at: float = 0.0
         # parking_slots, device 등록 정보 등을 위한 내부 상태
         self._parking_state: dict[str, bool] = {}
+        # 입구/출구 플로우용 플래그 (케이스 1/3: LPR 번호판을 한 번만 서버에 보낼 때 사용)
+        self._pending_entry_trigger: bool = False
+        self._pending_exit_trigger: bool = False
+        # 입구 자동 모드용 상태 (등록 차량 입차 후 차량 통과 시 닫기)
+        self._entry_gate_pending_close: bool = False
+        self._last_operation_mode_on: bool = True
+        self._last_gate_sensor_state: int = 1
+        self._last_gate_auto_state: int = 0
+        self._last_entry_sensor_detected: bool = False
+        self._last_exit_sensor_detected: bool = False
 
     def start(self) -> None:
         """
@@ -196,6 +206,68 @@ class DeviceManager:
             self._tx.mark_lpr_apds_detected(is_exit=False)
             self._tx.mark_lpr_apds_detected(is_exit=True)
             self._tx.pulse_entry_exit_sensor_detected(is_exit=(ev == 2))
+            # EV_ENTRY(1) 감지 시, 다음에 들어오는 입구 LPR 번호판을
+            # parking_entry_event 로 서버에 기록할 수 있도록 플래그 설정
+            if ev == 1:
+                self._pending_entry_trigger = True
+            # EV_EXIT(2) 감지 시, 다음에 들어오는 출구 LPR 번호판을
+            # parking_exit_event 로 서버에 기록할 수 있도록 플래그 설정
+            if ev == 2:
+                self._pending_exit_trigger = True
+
+    # ───────── 입구 LPR 번호판 콜백 (케이스 1: 등록 차량 입차 기록) ─────────
+    def on_entry_lpr_plate(self, plate: str) -> None:
+        """
+        MainWindow 의 입구 LPR 워커에서 번호판이 안정적으로 인식되었을 때 호출.
+        - 직전에 EV_ENTRY 트리거가 있었을 때만 서버에 입차 이벤트를 전송한다.
+        """
+        if not self._pending_entry_trigger:
+            return
+        self._pending_entry_trigger = False
+        try:
+            rec = self._tx.send_parking_entry_event(plate, entry_img_path=None)
+            is_reg = int(rec.get("is_registered") or 0)
+            self._append_gate_log(
+                f"[ENTRY] plate={plate} record_id={rec.get('record_id')} is_registered={is_reg}"
+            )
+
+            # ----- 케이스 1: 등록 차량 + 자동 모드일 때 입구 게이트 자동 개방 -----
+            if (
+                is_reg == 1
+                and self._last_operation_mode_on
+                and int(self._last_gate_sensor_state) == 3  # 3: 자동 모드
+            ):
+                self._append_gate_log(
+                    "[ENTRY] 등록 차량 + 자동 모드 → 게이트 자동 개방 시도"
+                )
+                result = self.open_gate()
+                if result.get("ok"):
+                    # 차량이 통과한 뒤(entry_sensor_detected=False로 떨어질 때) 자동으로 닫기
+                    self._entry_gate_pending_close = True
+                else:
+                    self._append_gate_log(
+                        f"[ENTRY] open_gate 실패 state={result.get('state')} detail={result.get('detail')}"
+                    )
+        except Exception as exc:  # noqa: BLE001
+            self._append_gate_log(f"[ENTRY] parking_entry_event 실패 plate={plate} ({exc})")
+
+    # ───────── 출구 LPR 번호판 콜백 (케이스 3: 등록 차량 출차 기록) ─────────
+    def on_exit_lpr_plate(self, plate: str) -> None:
+        """
+        MainWindow 의 출구 LPR 워커에서 번호판이 안정적으로 인식되었을 때 호출.
+        - 직전에 EV_EXIT 트리거가 있었을 때만 서버에 출차 이벤트를 전송한다.
+        """
+        if not self._pending_exit_trigger:
+            return
+        self._pending_exit_trigger = False
+        try:
+            rec = self._tx.send_parking_exit_event(plate, exit_img_path=None, rfid_card_uid=None)
+            self._append_gate_log(
+                f"[EXIT] plate={plate} record_id={rec.get('record_id')} is_registered={rec.get('is_registered')} "
+                f"charge={rec.get('charge_amount')}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._append_gate_log(f"[EXIT] parking_exit_event 실패 plate={plate} ({exc})")
 
     def get_gate_motor_status(self) -> dict[str, object]:
         return dict(self._gate_motor_status)
@@ -229,11 +301,18 @@ class DeviceManager:
     ) -> None:
         """
         대시보드의 차단기 상태(닫힘/열림/자동)를 실제 보드1_1 모터 상태와 동기화한다.
+
         - 연결 해제 시: 서버 상태를 0(연결 안됨)으로 강제
         - 연결 시 0이면: 기본값 2(열림)으로 복구
         - 수동(1/2) 선택 시: 해당 상태를 유지하도록 주기적으로 재명령
-        - 자동(3) 선택 시: 입/출차 감지 없으면 닫힘, 감지 있으면 열림
+        - 자동(3) 선택 시: 이제 LPR/입출차 플로우(on_entry_lpr_plate 등)에서만
+          게이트를 여닫고, 여기서는 자동 닫힘 조건만 처리한다.
         """
+        # 최근 스냅샷 저장 (입출차 플로우에서 참조)
+        self._last_operation_mode_on = True  # 운영 모드는 2.client 대시보드에서만 변경, 단순 ON 기준
+        self._last_gate_sensor_state = int(gate_sensor_state)
+        self._last_entry_sensor_detected = bool(entry_sensor_detected)
+        self._last_exit_sensor_detected = bool(exit_sensor_detected)
         if not gate_connected:
             self._tx.set_gate_state(gate_sensor_state=0, gate_auto_state=0)
             return
@@ -243,13 +322,23 @@ class DeviceManager:
             self._tx.set_gate_state(gate_sensor_state=2)
             target_state = 2
 
+        # 수동 모드(1/2)에서는 기존 로직 유지
         if target_state in (1, 2):
             desired_motor_state = "CLOSED" if target_state == 1 else "OPEN"
             desired_auto_state = 2 if target_state == 1 else 1
         elif target_state == 3:
-            detected_any = bool(entry_sensor_detected) or bool(exit_sensor_detected)
-            desired_motor_state = "OPEN" if detected_any else "CLOSED"
-            desired_auto_state = 1 if detected_any else 2
+            # 자동 모드(3)에서는 여기서 더 이상 감지 센서만으로 자동 개폐하지 않는다.
+            # 대신 입출차 플로우(on_entry_lpr_plate/on_exit_lpr_plate)에서 open_gate 를 호출하고,
+            # 여기서는 "언제 닫을지"만 판단한다.
+            current_motor_state = str(self._gate_motor_status.get("state") or "").upper()
+            # 입구 게이트를 열어둔 상태에서, 차량이 통과해 entry_sensor_detected 가 False 로 떨어지면 닫기
+            if self._entry_gate_pending_close and not entry_sensor_detected:
+                self._append_gate_log("[ENTRY] 차량 통과 감지 → 게이트 자동 닫힘 시도")
+                result = self.close_gate()
+                if result.get("ok"):
+                    self._entry_gate_pending_close = False
+            # 자동 모드에서는 여기서 추가 open/close 명령을 보내지 않는다.
+            return
         else:
             return
 
@@ -300,18 +389,15 @@ class DeviceManager:
             return
 
         # 0: 연결안됨, 1: 닫힘, 2: 열림, 3: 자동
-        # 자동(3)일 때만 운영상태 기반 메시지/자동게이트 상태를 동기화한다.
+        # 자동(3)일 때도 이제는 gate_auto_state 를 주기적으로 강제로 바꾸지 않고,
+        # LCD 메시지만 운영 상태에 맞게 표시한다.
         if int(gate_sensor_state) == 3:
             if operation_mode_on:
                 line1 = "Welcom PARKING"
                 line2 = f"empty {int(free_slots)}"
-                if int(gate_auto_state) != 1:
-                    self._tx.set_gate_auto_state(1)
             else:
                 line1 = "PARKING Closed."
                 line2 = "Sorry."
-                if int(gate_auto_state) != 2:
-                    self._tx.set_gate_auto_state(2)
         else:
             # 수동/미연결 모드에서는 기본 베이스만 제공(향후 타입별 확장 포인트)
             if int(gate_sensor_state) == 1:

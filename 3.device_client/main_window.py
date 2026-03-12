@@ -421,7 +421,7 @@ class MainWindow(QMainWindow):
         thread = QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run_loop)
-        worker.result_ready.connect(self.log_entry.append)
+        worker.result_ready.connect(self._on_entry_lpr_result)
         thread.start()
         self._entry_ocr_worker = worker
         self._entry_ocr_thread = thread
@@ -439,7 +439,7 @@ class MainWindow(QMainWindow):
         thread = QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run_loop)
-        worker.result_ready.connect(self.log_exit.append)
+        worker.result_ready.connect(self._on_exit_lpr_result)
         thread.start()
         self._exit_ocr_worker = worker
         self._exit_ocr_thread = thread
@@ -452,6 +452,47 @@ class MainWindow(QMainWindow):
     def _on_exit_ocr_checked(self, state: int) -> None:
         if state and self._exit_ocr_worker is None:
             self._ensure_exit_ocr_worker()
+
+    def _on_entry_lpr_result(self, text: str) -> None:
+        """
+        입구 LPR 워커 결과 콜백.
+        - 기존처럼 로그에 출력
+        - DeviceManager 에도 전달하여, EV_ENTRY 이후 첫 번호판을 서버에 기록하게 한다.
+        """
+        self.log_entry.append(text)
+        # text 형식: "YYYY-MM-DD HH:MM:SS | 번호판"
+        parts = text.split("|", maxsplit=1)
+        if len(parts) == 2:
+            plate = parts[1].strip()
+        else:
+            plate = text.strip()
+        if not plate or plate.startswith("["):
+            # "[LPR]" / "[미완성]" 등은 무시
+            return
+        try:
+            self._device_mgr.on_entry_lpr_plate(plate)
+        except Exception:
+            # 디바이스 매니저 쪽 에러는 LPR 로그만 남기고 UI는 계속 동작
+            pass
+
+    def _on_exit_lpr_result(self, text: str) -> None:
+        """
+        출구 LPR 워커 결과 콜백.
+        - 기존처럼 로그에 출력
+        - DeviceManager 에도 전달하여, EV_EXIT 이후 첫 번호판을 서버에 출차 이벤트로 기록하게 한다.
+        """
+        self.log_exit.append(text)
+        parts = text.split("|", maxsplit=1)
+        if len(parts) == 2:
+            plate = parts[1].strip()
+        else:
+            plate = text.strip()
+        if not plate or plate.startswith("["):
+            return
+        try:
+            self._device_mgr.on_exit_lpr_plate(plate)
+        except Exception:
+            pass
 
     # ───────── 이미지 저장 (lpr_debug, 대시보드 전용 파일명) ─────────
     def _lpr_debug_dir(self) -> Path:

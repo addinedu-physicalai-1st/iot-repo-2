@@ -101,6 +101,31 @@ class DeviceApiClient:
         # TODO: 필요 시 /events API 추가
         print(f"[EVENT] {event_type}: {message}")
 
+    # ─── 입·출차 이벤트 ────────────────────────────────────────
+    def parking_entry_event(self, license_plate: str, entry_img_path: str | None = None) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "license_plate": license_plate,
+            "entry_img_path": entry_img_path,
+        }
+        resp = self._client.post("/parking/entry-event", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+    def parking_exit_event(
+        self,
+        license_plate: str,
+        exit_img_path: str | None = None,
+        rfid_card_uid: str | None = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "license_plate": license_plate,
+            "exit_img_path": exit_img_path,
+            "rfid_card_uid": rfid_card_uid,
+        }
+        resp = self._client.post("/parking/exit-event", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
     # ─── devices / device_clients 연동 ─────────────────────────
     def list_device_clients(self) -> list[dict[str, Any]]:
         resp = self._client.get("/device-clients/")

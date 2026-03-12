@@ -7,6 +7,7 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 import cv2
 
@@ -57,6 +58,10 @@ class TransmissionManager:
         self._gate_auto_state: int = 0
         self._entry_sensor_detected: bool = False
         self._exit_sensor_detected: bool = False
+
+        # 입출차 플로우 디버그 로그 (3.device_client 로컬 파일)
+        base_dir = Path(__file__).resolve().parent
+        self._flow_log_path = base_dir / "parking_flow_debug.log"
 
         # LPR 용 REST 서버 (등록/config/command) — 연결 상태는 UDP 기준으로만 갱신
         self._start_lpr_rest_server()
@@ -242,6 +247,63 @@ class TransmissionManager:
 
     def set_gate_auto_state(self, gate_auto_state: int) -> None:
         self.set_gate_state(gate_auto_state=int(gate_auto_state))
+
+    # ───────── 입·출차 이벤트 (서버 연동) ─────────
+    def send_parking_entry_event(
+        self,
+        license_plate: str,
+        entry_img_path: str | None = None,
+    ) -> Dict[str, Any]:
+        """입구 LPR 결과를 서버 /parking/entry-event 로 전송."""
+        try:
+            self._append_flow_log(
+                f"[ENTRY_CALL] plate={license_plate!r} img={entry_img_path!r}"
+            )
+            rec = self._api.parking_entry_event(license_plate, entry_img_path)
+            self._append_flow_log(
+                f"[ENTRY_OK] record_id={rec.get('record_id')} "
+                f"is_registered={rec.get('is_registered')} resident_id={rec.get('resident_id')}"
+            )
+            return rec
+        except Exception as exc:  # noqa: BLE001
+            self._append_flow_log(f"[ENTRY_ERR] plate={license_plate!r} error={exc!r}")
+            raise
+
+    def send_parking_exit_event(
+        self,
+        license_plate: str,
+        exit_img_path: str | None = None,
+        rfid_card_uid: str | None = None,
+    ) -> Dict[str, Any]:
+        """출구 LPR/RFID 결과를 서버 /parking/exit-event 로 전송."""
+        try:
+            self._append_flow_log(
+                f"[EXIT_CALL] plate={license_plate!r} img={exit_img_path!r} rfid={rfid_card_uid!r}"
+            )
+            rec = self._api.parking_exit_event(license_plate, exit_img_path, rfid_card_uid)
+            self._append_flow_log(
+                f"[EXIT_OK] record_id={rec.get('record_id')} "
+                f"is_registered={rec.get('is_registered')} resident_id={rec.get('resident_id')} "
+                f"charge={rec.get('charge_amount')}"
+            )
+            return rec
+        except Exception as exc:  # noqa: BLE001
+            self._append_flow_log(
+                f"[EXIT_ERR] plate={license_plate!r} rfid={rfid_card_uid!r} error={exc!r}"
+            )
+            raise
+
+    # ───────── 입출차 플로우용 로컬 디버그 로그 ─────────
+    def _append_flow_log(self, msg: str) -> None:
+        try:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            line = f"{ts} {msg}\n"
+            self._flow_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._flow_log_path.open("a", encoding="utf-8") as f:
+                f.write(line)
+        except Exception:
+            # 파일 오류는 기능에 영향 주지 않도록 무시
+            pass
 
     def set_tower_slots_inactive(self) -> None:
         """

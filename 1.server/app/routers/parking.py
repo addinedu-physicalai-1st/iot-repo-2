@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import List
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
@@ -7,7 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
-from ..config import set_env_value, settings
+from ..config import BASE_DIR, set_env_value, settings
 from ..db import get_db
 
 
@@ -25,6 +26,26 @@ OPERATION_MODE_ON = settings.operation_mode_on
 GATE_SENSOR_STATE = settings.gate_sensor_state
 # 0: 동작하지 않음, 1: 열림, 2: 닫힘
 GATE_AUTO_STATE = settings.gate_auto_state
+
+
+_LOG_DIR = BASE_DIR / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+_PARKING_EVENT_LOG = _LOG_DIR / "parking_events.log"
+
+
+def _append_event_log(kind: str, message: str) -> None:
+    """
+    입·출차 이벤트를 파일로 남겨서, 콘솔 로그가 너무 길어져도
+    parking_events.log 하나만 보면 흐름을 확인할 수 있게 한다.
+    """
+    try:
+        ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"{ts} [{kind}] {message}\n"
+        with _PARKING_EVENT_LOG.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        # 파일 쓰기 에러가 전체 API 동작을 막지 않도록 무시
+        pass
 
 
 @router.get("/slots", response_model=List[schemas.ParkingSlotRead])
@@ -265,4 +286,193 @@ def get_record_exit_image(record_id: int, db: Session = Depends(get_db)):
     if not path:
         raise HTTPException(status_code=404, detail="Exit image file not found")
     return FileResponse(path, media_type="image/jpeg")
+
+
+# ----- 입·출차 이벤트 API (LPR/센서 → 서버 → DB 반영) -----
+@router.post("/entry-event", response_model=schemas.ParkingRecordRead)
+def parking_entry_event(
+    payload: schemas.ParkingEntryEvent,
+    db: Session = Depends(get_db),
+):
+    """
+    입구 트리거 + LPR 결과로 서버에 입차 이벤트를 기록한다.
+
+    - license_plate 로 residents 를 조회하여 등록 차량 여부를 판단
+    - parking_records 에 새 레코드를 생성 (exit_timestamp 는 NULL)
+    """
+    plate = payload.license_plate.strip()
+    if not plate:
+        _append_event_log("ENTRY_ERROR", "license_plate is empty")
+        raise HTTPException(status_code=400, detail="license_plate is required")
+
+    resident = (
+        db.query(models.Resident)
+        .filter(models.Resident.car_plate == plate)
+        .first()
+    )
+    is_registered = 1 if resident else 0
+    resident_id = resident.id if resident else None
+
+    # 이미 활성화된 입차 레코드가 있으면 중복 생성 방지
+    # - resident_id 가 있으면 resident_id 기준으로 우선 검색
+    # - 없으면 license_plate 기준
+    # - 최근 2분 이내 레코드만 대상으로 한다.
+    active_q = db.query(models.ParkingRecord).filter(
+        models.ParkingRecord.exit_timestamp.is_(None),
+    )
+    recent_since = datetime.utcnow() - timedelta(minutes=2)
+    active_q = active_q.filter(models.ParkingRecord.entry_timestamp >= recent_since)
+
+    rec: models.ParkingRecord | None = None
+    if resident_id is not None:
+        rec = (
+            active_q.filter(models.ParkingRecord.resident_id == resident_id)
+            .order_by(models.ParkingRecord.entry_timestamp.desc())
+            .first()
+        )
+    if rec is None:
+        rec = (
+            active_q.filter(models.ParkingRecord.license_plate == plate)
+            .order_by(models.ParkingRecord.entry_timestamp.desc())
+            .first()
+        )
+
+    if rec is not None:
+        # 이미 최근에 활성 입차 레코드가 있으면 그대로 재사용하고, 필요 시 이미지 경로만 업데이트
+        if payload.entry_img_path and not rec.entry_img_path:
+            rec.entry_img_path = payload.entry_img_path
+            db.add(rec)
+            db.commit()
+            db.refresh(rec)
+        _append_event_log(
+            "ENTRY_DUP",
+            f"record_id={rec.record_id} plate={plate} "
+            f"is_registered={rec.is_registered} resident_id={rec.resident_id}",
+        )
+        return rec
+
+    now = datetime.utcnow()
+    rec = models.ParkingRecord(
+        license_plate=plate,
+        entry_timestamp=now,
+        exit_timestamp=None,
+        is_registered=is_registered,
+        charge_amount=0,
+        resident_id=resident_id,
+        entry_img_path=payload.entry_img_path,
+        exit_img_path=None,
+    )
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+    _append_event_log(
+        "ENTRY",
+        f"record_id={rec.record_id} plate={plate} "
+        f"is_registered={is_registered} resident_id={resident_id}",
+    )
+    return rec
+
+
+@router.post("/exit-event", response_model=schemas.ParkingRecordRead)
+def parking_exit_event(
+    payload: schemas.ParkingExitEvent,
+    db: Session = Depends(get_db),
+):
+    """
+    출구 트리거 + LPR/RFID 결과로 서버에 출차 이벤트를 기록한다.
+
+    - 가능한 경우 활성 parking_records (exit_timestamp IS NULL)를 찾는다.
+      우선순위: resident_id → license_plate
+    - 등록 차량이면 요금 0, 비등록 차량이면 경과 시간 기반 요금 계산(분당 100원 예시)
+    - RFID 카드가 찍힌 경우, 비등록 차량이더라도 resident_id 를 연결하여 등록 출차로 처리 가능
+    """
+    plate = payload.license_plate.strip()
+    if not plate:
+        _append_event_log("EXIT_ERROR", "license_plate is empty")
+        raise HTTPException(status_code=400, detail="license_plate is required")
+
+    # RFID 카드로 resident 식별 (있으면 우선 사용)
+    resident = None
+    if payload.rfid_card_uid:
+        card = (
+            db.query(models.RfidCard)
+            .filter(
+                models.RfidCard.card_uid == payload.rfid_card_uid,
+                models.RfidCard.is_active.is_(True),
+            )
+            .first()
+        )
+        if card and card.resident_id:
+            resident = (
+                db.query(models.Resident)
+                .filter(models.Resident.id == card.resident_id)
+                .first()
+            )
+
+    if resident is None:
+        resident = (
+            db.query(models.Resident)
+            .filter(models.Resident.car_plate == plate)
+            .first()
+        )
+
+    active_q = db.query(models.ParkingRecord).filter(
+        models.ParkingRecord.exit_timestamp.is_(None),
+    )
+    rec = None
+    if resident is not None:
+        rec = (
+            active_q.filter(models.ParkingRecord.resident_id == resident.id)
+            .order_by(models.ParkingRecord.entry_timestamp.desc())
+            .first()
+        )
+    if rec is None:
+        rec = (
+            active_q.filter(models.ParkingRecord.license_plate == plate)
+            .order_by(models.ParkingRecord.entry_timestamp.desc())
+            .first()
+        )
+
+    if rec is None:
+        _append_event_log(
+            "EXIT_ERROR",
+            f"active record not found for plate={plate} rfid={payload.rfid_card_uid}",
+        )
+        raise HTTPException(status_code=404, detail="Active parking record not found")
+
+    now = datetime.utcnow()
+    rec.exit_timestamp = now
+    rec.exit_img_path = payload.exit_img_path or rec.exit_img_path
+
+    # resident_id 연결/등록 전환 로직
+    if resident is not None:
+        rec.resident_id = resident.id
+        # 비등록 차량이었지만 resident 가 확인되면 등록 차량으로 전환
+        rec.is_registered = 1
+
+    # 요금 계산: 비등록 차량만, 입차~출차 경과 시간(분) * 100원
+    if rec.is_registered:
+        # 등록 차량은 요금 0 (추후 정책 바뀌면 여기 수정)
+        rec.charge_amount = rec.charge_amount or 0
+    else:
+        if rec.entry_timestamp is None:
+            elapsed_minutes = 0
+        else:
+            delta = now - rec.entry_timestamp
+            elapsed_minutes = int(delta.total_seconds() // 60)
+            if delta.total_seconds() % 60 > 0:
+                elapsed_minutes += 1
+        unit_fee = 100
+        rec.charge_amount = max(rec.charge_amount, elapsed_minutes * unit_fee)
+
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+    _append_event_log(
+        "EXIT",
+        f"record_id={rec.record_id} plate={plate} "
+        f"is_registered={rec.is_registered} resident_id={rec.resident_id} "
+        f"charge={rec.charge_amount}",
+    )
+    return rec
 
