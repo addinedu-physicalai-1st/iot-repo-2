@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from typing import List, Dict, Any
+from pathlib import Path
+from datetime import datetime
+
+import cv2
 
 from PyQt6.QtCore import Qt, QTimer, QThread
 from PyQt6.QtGui import QImage, QPixmap
@@ -18,6 +22,9 @@ from PyQt6.QtWidgets import (
     QTextEdit,
 )
 
+from ultralytics import YOLO
+from paddleocr import PaddleOCR
+
 from architect_manager import ArchitectManager
 from device_manager import DeviceManager
 from info_manager import InfoManager
@@ -29,6 +36,7 @@ from lpr_enter_test_dialog import LprEnterTestDialog
 from lpr_exit_test_dialog import LprExitTestDialog
 from lpr_detector import LprRecognitionWorker
 from config import settings
+from saved_image_ocr_dialog import SavedImageOcrDialog
 
 ENTRY_GATE_GUID = "DEV-GATE-1"
 
@@ -66,13 +74,10 @@ class MainWindow(QMainWindow):
         self._exit_ocr_worker: LprRecognitionWorker | None = None
         self._exit_ocr_thread: QThread | None = None
         self._exit_ocr_counter: int = 0
-        # 대시보드용 OCR 워커 (실시간 영상과 분리)
-        self._entry_ocr_worker: LprRecognitionWorker | None = None
-        self._entry_ocr_thread: QTimer | None = None
-        self._entry_ocr_counter: int = 0
-        self._exit_ocr_worker: LprRecognitionWorker | None = None
-        self._exit_ocr_thread: QTimer | None = None
-        self._exit_ocr_counter: int = 0
+        # 마지막 표시 프레임 (저장용)
+        self._last_entry_frame = None
+        self._last_exit_frame = None
+        # 저장 이미지 OCR용은 별도 창(saved_image_ocr_dialog)에서만 사용
 
         self.setWindowTitle("스마트 주차장 - 디바이스 클라이언트 대시보드")
         self.resize(1100, 700)
@@ -139,6 +144,12 @@ class MainWindow(QMainWindow):
         entry_log_row.addWidget(self.chk_entry_ocr)
 
         entry_cam_layout.addLayout(entry_log_row)
+
+        entry_btn_row = QHBoxLayout()
+        self.btn_entry_save = QPushButton("입구 이미지 저장")
+        self.btn_entry_save.clicked.connect(self._on_entry_save_image)
+        entry_btn_row.addWidget(self.btn_entry_save)
+        entry_cam_layout.addLayout(entry_btn_row)
         cam_box_inner.addLayout(entry_cam_layout)
 
         cam_box_inner.addSpacing(10)
@@ -166,6 +177,12 @@ class MainWindow(QMainWindow):
         exit_log_row.addWidget(self.chk_exit_ocr)
 
         exit_cam_layout.addLayout(exit_log_row)
+
+        exit_btn_row = QHBoxLayout()
+        self.btn_exit_save = QPushButton("출구 이미지 저장")
+        self.btn_exit_save.clicked.connect(self._on_exit_save_image)
+        exit_btn_row.addWidget(self.btn_exit_save)
+        exit_cam_layout.addLayout(exit_btn_row)
         cam_box_inner.addLayout(exit_cam_layout)
 
         # [RIGHT] 디바이스 목록 및 제어 영역 (기존 3.device_client 로직 유지)
@@ -208,6 +225,10 @@ class MainWindow(QMainWindow):
         self.btn_lpr_exit_test = QPushButton("출구 LPR 카메라 테스트 (esp32_lpr_exit)")
         self.btn_lpr_exit_test.clicked.connect(self.open_lpr_exit_test_dialog)
         btn_row.addWidget(self.btn_lpr_exit_test)
+
+        self.btn_saved_ocr = QPushButton("저장 이미지 OCR 테스트 창")
+        self.btn_saved_ocr.clicked.connect(self.open_saved_image_ocr_dialog)
+        btn_row.addWidget(self.btn_saved_ocr)
 
         btn_row.addStretch()
         devices_layout.addLayout(btn_row)
@@ -325,6 +346,7 @@ class MainWindow(QMainWindow):
         if entry_frame:
             _, img = entry_frame
             if img is not None:
+                self._last_entry_frame = img.copy()
                 self._set_pixmap_on_label(self.video_entry, img)
                 # 입구 OCR 테스트 체크 시, 일정 주기로 OCR 워커에 프레임 전달
                 if self.chk_entry_ocr.isChecked():
@@ -342,6 +364,7 @@ class MainWindow(QMainWindow):
         if exit_frame:
             _, img = exit_frame
             if img is not None:
+                self._last_exit_frame = img.copy()
                 self._set_pixmap_on_label(self.video_exit, img)
                 if self.chk_exit_ocr.isChecked():
                     self._ensure_exit_ocr_worker()
@@ -419,6 +442,49 @@ class MainWindow(QMainWindow):
     def _on_exit_ocr_checked(self, state: int) -> None:
         if state and self._exit_ocr_worker is None:
             self._ensure_exit_ocr_worker()
+
+    # ───────── 이미지 저장 (lpr_debug, 대시보드 전용 파일명) ─────────
+    def _lpr_debug_dir(self) -> Path:
+        return Path(__file__).resolve().parent / "lpr_debug"
+
+    def _on_entry_save_image(self) -> None:
+        if self._last_entry_frame is None:
+            self.statusBar().showMessage("입구 영상이 없습니다.", 2000)
+            return
+        d = self._lpr_debug_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = d / f"dashboard_entry_{ts}.jpg"
+        try:
+            cv2.imwrite(str(path), self._last_entry_frame)
+            self.statusBar().showMessage(f"입구 이미지 저장: {path.name}", 2000)
+        except Exception as e:
+            self.statusBar().showMessage(f"저장 실패: {e}", 3000)
+
+    def _on_exit_save_image(self) -> None:
+        if self._last_exit_frame is None:
+            self.statusBar().showMessage("출구 영상이 없습니다.", 2000)
+            return
+        d = self._lpr_debug_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = d / f"dashboard_exit_{ts}.jpg"
+        try:
+            cv2.imwrite(str(path), self._last_exit_frame)
+            self.statusBar().showMessage(f"출구 이미지 저장: {path.name}", 2000)
+        except Exception as e:
+            self.statusBar().showMessage(f"저장 실패: {e}", 3000)
+
+    def open_saved_image_ocr_dialog(self) -> None:
+        """저장된 이미지 선택 후 OCR 테스트하는 별도 창을 연다 (비즈니스 로직 분리)."""
+        d = SavedImageOcrDialog(
+            default_dir=str(self._lpr_debug_dir()),
+            model_path=settings.lpr_plate_model_path,
+            parent=self,
+        )
+        d.show()
+        d.raise_()
+        d.activateWindow()
 
     def _update_summary(self, devices: List[Dict[str, Any]] | None = None) -> None:
         health = self._info.server_health or {}
