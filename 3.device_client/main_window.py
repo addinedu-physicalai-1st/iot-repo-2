@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import List, Dict, Any
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QThread
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -26,6 +27,8 @@ from exit_gate_test_dialog import ExitGateTestDialog
 from parking_guide_test_dialog import ParkingGuideTestDialog
 from lpr_enter_test_dialog import LprEnterTestDialog
 from lpr_exit_test_dialog import LprExitTestDialog
+from lpr_detector import LprRecognitionWorker
+from config import settings
 
 ENTRY_GATE_GUID = "DEV-GATE-1"
 
@@ -56,6 +59,20 @@ class MainWindow(QMainWindow):
         self._parking_dialog: ParkingGuideTestDialog | None = None
         self._lpr_dialog: LprEnterTestDialog | None = None
         self._lpr_exit_dialog: LprExitTestDialog | None = None
+        # 대시보드용 OCR 워커 (실시간 영상과 분리, 3.device_client OCR 설정 재사용)
+        self._entry_ocr_worker: LprRecognitionWorker | None = None
+        self._entry_ocr_thread: QThread | None = None
+        self._entry_ocr_counter: int = 0
+        self._exit_ocr_worker: LprRecognitionWorker | None = None
+        self._exit_ocr_thread: QThread | None = None
+        self._exit_ocr_counter: int = 0
+        # 대시보드용 OCR 워커 (실시간 영상과 분리)
+        self._entry_ocr_worker: LprRecognitionWorker | None = None
+        self._entry_ocr_thread: QTimer | None = None
+        self._entry_ocr_counter: int = 0
+        self._exit_ocr_worker: LprRecognitionWorker | None = None
+        self._exit_ocr_thread: QTimer | None = None
+        self._exit_ocr_counter: int = 0
 
         self.setWindowTitle("스마트 주차장 - 디바이스 클라이언트 대시보드")
         self.resize(1100, 700)
@@ -108,11 +125,20 @@ class MainWindow(QMainWindow):
         self.video_entry.setStyleSheet("background-color: #222; border: 1px solid #444;")
         entry_cam_layout.addWidget(self.video_entry)
 
+        # 입구 OCR 결과 + 체크박스 (대시보드용 테스트 OCR)
+        entry_log_row = QHBoxLayout()
         self.log_entry = QTextEdit()
         self.log_entry.setReadOnly(True)
         self.log_entry.setMaximumHeight(80)
-        self.log_entry.setPlaceholderText("입구 OCR 결과 (테스트 다이얼로그와 동일 설정 사용 예정)...")
-        entry_cam_layout.addWidget(self.log_entry)
+        self.log_entry.setPlaceholderText("입구 OCR 결과 (대시보드 테스트용)...")
+        entry_log_row.addWidget(self.log_entry, 1)
+
+        self.chk_entry_ocr = QCheckBox("입구 OCR 테스트")
+        self.chk_entry_ocr.setChecked(False)
+        self.chk_entry_ocr.stateChanged.connect(self._on_entry_ocr_checked)
+        entry_log_row.addWidget(self.chk_entry_ocr)
+
+        entry_cam_layout.addLayout(entry_log_row)
         cam_box_inner.addLayout(entry_cam_layout)
 
         cam_box_inner.addSpacing(10)
@@ -126,11 +152,20 @@ class MainWindow(QMainWindow):
         self.video_exit.setStyleSheet("background-color: #222; border: 1px solid #444;")
         exit_cam_layout.addWidget(self.video_exit)
 
+        # 출구 OCR 결과 + 체크박스
+        exit_log_row = QHBoxLayout()
         self.log_exit = QTextEdit()
         self.log_exit.setReadOnly(True)
         self.log_exit.setMaximumHeight(80)
-        self.log_exit.setPlaceholderText("출구 OCR 결과 (테스트 다이얼로그와 동일 설정 사용 예정)...")
-        exit_cam_layout.addWidget(self.log_exit)
+        self.log_exit.setPlaceholderText("출구 OCR 결과 (대시보드 테스트용)...")
+        exit_log_row.addWidget(self.log_exit, 1)
+
+        self.chk_exit_ocr = QCheckBox("출구 OCR 테스트")
+        self.chk_exit_ocr.setChecked(False)
+        self.chk_exit_ocr.stateChanged.connect(self._on_exit_ocr_checked)
+        exit_log_row.addWidget(self.chk_exit_ocr)
+
+        exit_cam_layout.addLayout(exit_log_row)
         cam_box_inner.addLayout(exit_cam_layout)
 
         # [RIGHT] 디바이스 목록 및 제어 영역 (기존 3.device_client 로직 유지)
@@ -291,6 +326,13 @@ class MainWindow(QMainWindow):
             _, img = entry_frame
             if img is not None:
                 self._set_pixmap_on_label(self.video_entry, img)
+                # 입구 OCR 테스트 체크 시, 일정 주기로 OCR 워커에 프레임 전달
+                if self.chk_entry_ocr.isChecked():
+                    self._ensure_entry_ocr_worker()
+                    if self._entry_ocr_worker and self._entry_ocr_worker.is_available():
+                        self._entry_ocr_counter = (self._entry_ocr_counter + 1) % 5
+                        if self._entry_ocr_counter == 0:
+                            self._entry_ocr_worker.submit_frame(img.copy())
 
         # 출구 영상 (UDP 7090)
         try:
@@ -301,6 +343,12 @@ class MainWindow(QMainWindow):
             _, img = exit_frame
             if img is not None:
                 self._set_pixmap_on_label(self.video_exit, img)
+                if self.chk_exit_ocr.isChecked():
+                    self._ensure_exit_ocr_worker()
+                    if self._exit_ocr_worker and self._exit_ocr_worker.is_available():
+                        self._exit_ocr_counter = (self._exit_ocr_counter + 1) % 5
+                        if self._exit_ocr_counter == 0:
+                            self._exit_ocr_worker.submit_frame(img.copy())
 
     def _set_pixmap_on_label(self, label: QLabel, cv_img: Any) -> None:
         """OpenCV 이미지를 QLabel 에 맞춰 표시."""
@@ -325,6 +373,52 @@ class MainWindow(QMainWindow):
             )
         except Exception:
             pass
+
+    # ───────── 대시보드용 OCR 워커 초기화 및 체크박스 핸들러 ─────────
+    def _ensure_entry_ocr_worker(self) -> None:
+        if self._entry_ocr_worker is not None:
+            return
+        worker = LprRecognitionWorker(
+            model_path=settings.lpr_plate_model_path,
+            plate_conf_threshold=0.12,
+            stability_threshold=1,
+            cooldown_seconds=3.0,
+            mirror_flip=False,
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run_loop)
+        worker.result_ready.connect(self.log_entry.append)
+        thread.start()
+        self._entry_ocr_worker = worker
+        self._entry_ocr_thread = thread
+
+    def _ensure_exit_ocr_worker(self) -> None:
+        if self._exit_ocr_worker is not None:
+            return
+        worker = LprRecognitionWorker(
+            model_path=settings.lpr_plate_model_path,
+            plate_conf_threshold=0.12,
+            stability_threshold=1,
+            cooldown_seconds=3.0,
+            mirror_flip=False,
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run_loop)
+        worker.result_ready.connect(self.log_exit.append)
+        thread.start()
+        self._exit_ocr_worker = worker
+        self._exit_ocr_thread = thread
+
+    def _on_entry_ocr_checked(self, state: int) -> None:
+        # 체크 해제 시에는 워커는 그대로 두고, submit_frame 만 중단
+        if state and self._entry_ocr_worker is None:
+            self._ensure_entry_ocr_worker()
+
+    def _on_exit_ocr_checked(self, state: int) -> None:
+        if state and self._exit_ocr_worker is None:
+            self._ensure_exit_ocr_worker()
 
     def _update_summary(self, devices: List[Dict[str, Any]] | None = None) -> None:
         health = self._info.server_health or {}
