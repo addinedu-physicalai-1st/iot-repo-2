@@ -124,18 +124,32 @@ class DashboardWindow(QMainWindow):
 
         main_layout.addWidget(summary_box)
 
-        # 실시간 영상 3구역: CCTV 웹캠 | 입구 LPR | 출구 LPR
+        # 실시간 영상 3구역: 상단 CCTV, 하단 입구/출구 LPR
         video_box = QGroupBox("실시간 영상 (CCTV · 입구 LPR · 출구 LPR)")
-        video_layout = QHBoxLayout()
+        video_layout = QVBoxLayout()
         video_box.setLayout(video_layout)
         video_style = "background-color: #252733; border-radius: 6px; border: 1px solid #3a3b45;"
         min_size = (320, 240)
 
+        # ── 상단: CCTV 영역 (영상 + 하단 제어 버튼) ────────────────
+        cctv_col = QVBoxLayout()
         self.label_cctv = QLabel("재생 버튼을 눌러 웹캠을 시작하세요.")
         self.label_cctv.setMinimumSize(*min_size)
         self.label_cctv.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label_cctv.setStyleSheet(video_style)
-        video_layout.addWidget(self.label_cctv, 1)
+        cctv_col.addWidget(self.label_cctv, 1)
+
+        self.btn_video_toggle = QPushButton("웹캠 재생")
+        self.btn_video_toggle.setCheckable(True)
+        self.btn_video_toggle.clicked.connect(self._on_video_toggle)
+        cctv_col.addWidget(self.btn_video_toggle)
+
+        cctv_wrapper = QWidget()
+        cctv_wrapper.setLayout(cctv_col)
+        video_layout.addWidget(cctv_wrapper, 2)
+
+        # ── 하단: 입구/출구 LPR 두 영상을 가로로 배치 ──────────────
+        lpr_row = QHBoxLayout()
 
         port_entry = settings.lpr_ws_port_entry
         port_exit = settings.lpr_ws_port_exit
@@ -144,23 +158,20 @@ class DashboardWindow(QMainWindow):
         self.label_lpr_entry.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label_lpr_entry.setStyleSheet(video_style)
         self.label_lpr_entry.setToolTip(f"3.device_client .env: LPR_WS_SERVER_ENTRY_URL=ws://127.0.0.1:{port_entry} (같은 PC)")
-        video_layout.addWidget(self.label_lpr_entry, 1)
+        lpr_row.addWidget(self.label_lpr_entry, 1)
 
         self.label_lpr_exit = QLabel(f"출구 LPR\n(수신 대기 · 포트 {port_exit})")
         self.label_lpr_exit.setMinimumSize(*min_size)
         self.label_lpr_exit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label_lpr_exit.setStyleSheet(video_style)
         self.label_lpr_exit.setToolTip(f"3.device_client .env: LPR_WS_SERVER_EXIT_URL=ws://127.0.0.1:{port_exit} (같은 PC)")
-        video_layout.addWidget(self.label_lpr_exit, 1)
+        lpr_row.addWidget(self.label_lpr_exit, 1)
 
-        self.btn_video_toggle = QPushButton("웹캠 재생")
-        self.btn_video_toggle.setCheckable(True)
-        self.btn_video_toggle.clicked.connect(self._on_video_toggle)
-        video_layout.addWidget(self.btn_video_toggle)
+        video_layout.addLayout(lpr_row, 1)
+
         if not _CV2_AVAILABLE:
             self.btn_video_toggle.setEnabled(False)
             self.label_cctv.setText("opencv-python\n필요")
-        main_layout.addWidget(video_box)
 
         # 중앙 영역: 좌측 주차면 맵, 우측 장비/이벤트
         splitter = QSplitter()
@@ -210,6 +221,8 @@ class DashboardWindow(QMainWindow):
         parking_layout.addWidget(create_slot_label("T6", "T6"), 4, 2)
 
         left_layout.addWidget(parking_box)
+        # 주차 레이아웃 아래에 실시간 영상 배치 (기존 레이아웃 유지, 위치만 이동)
+        left_layout.addWidget(video_box)
         left_layout.addStretch()
 
         splitter.addWidget(left_frame)
@@ -314,7 +327,8 @@ class DashboardWindow(QMainWindow):
         right_vlayout.addWidget(events_box, 1)
 
         splitter.addWidget(right_frame)
-        splitter.setSizes([500, 700])
+        # 좌우 폭을 픽셀 기준으로 대략 40:60 비율로 설정 (예: 800px : 1200px)
+        splitter.setSizes([400, 1600])
 
         # 리프레시 버튼 및 자동 리프레시 타이머
         btn_layout = QHBoxLayout()
