@@ -583,6 +583,8 @@ class TransmissionManager:
         try:
             if self._lpr_frame_queue.full():
                 self._lpr_frame_queue.get_nowait()
+            if img is not None:
+                img = cv2.flip(img, 0) #example) 0 : 상하 반전 , 1 : 좌우 반전 , -1 : 상하좌우 반전
             self._lpr_frame_queue.put((fno, img))
         except Exception:
             pass
@@ -594,8 +596,11 @@ class TransmissionManager:
         try:
             if self._lpr_exit_frame_queue.full():
                 self._lpr_exit_frame_queue.get_nowait()
+            """
+            #출구 영상은 정상적으로 수신되므로 보정할 필요가 없음.
             if img is not None:
-                img = cv2.flip(img, 1)
+                img = cv2.flip(img, )  #example) 0 : 상하 반전 , 1 : 좌우 반전 , -1 : 상하좌우 반전
+            """
             self._lpr_exit_frame_queue.put((fno, img))
         except Exception:
             pass

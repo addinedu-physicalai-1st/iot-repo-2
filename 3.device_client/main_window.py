@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import List, Dict, Any
 
 from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -13,6 +14,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QGroupBox,
+    QTextEdit,
 )
 
 from architect_manager import ArchitectManager
@@ -84,7 +86,57 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(summary_box)
 
-        # ───────── 디바이스 테이블 ─────────
+        # ───────── 중앙 분할 레이아웃 (6.device_client 스타일) ─────────
+        content_layout = QHBoxLayout()
+        main_layout.addLayout(content_layout)
+
+        # [LEFT] 카메라/LPR 모니터링 영역 (UI만 구성, 로직은 기존 LPR 테스트 다이얼로그 사용)
+        left_layout = QVBoxLayout()
+        content_layout.addLayout(left_layout, 2)
+
+        cam_box = QGroupBox("카메라 및 LPR 모니터링")
+        cam_box_inner = QVBoxLayout()
+        cam_box.setLayout(cam_box_inner)
+        left_layout.addWidget(cam_box)
+
+        # 입구 카메라 영역
+        entry_cam_layout = QVBoxLayout()
+        entry_cam_layout.addWidget(QLabel("<b>[입구]</b> LPR 카메라 (UDP 7070)"))
+        self.video_entry = QLabel("영상 대기 중...")
+        self.video_entry.setFixedSize(400, 240)
+        self.video_entry.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.video_entry.setStyleSheet("background-color: #222; border: 1px solid #444;")
+        entry_cam_layout.addWidget(self.video_entry)
+
+        self.log_entry = QTextEdit()
+        self.log_entry.setReadOnly(True)
+        self.log_entry.setMaximumHeight(80)
+        self.log_entry.setPlaceholderText("입구 OCR 결과 (테스트 다이얼로그와 동일 설정 사용 예정)...")
+        entry_cam_layout.addWidget(self.log_entry)
+        cam_box_inner.addLayout(entry_cam_layout)
+
+        cam_box_inner.addSpacing(10)
+
+        # 출구 카메라 영역
+        exit_cam_layout = QVBoxLayout()
+        exit_cam_layout.addWidget(QLabel("<b>[출구]</b> LPR 카메라 (UDP 7090)"))
+        self.video_exit = QLabel("영상 대기 중...")
+        self.video_exit.setFixedSize(400, 240)
+        self.video_exit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.video_exit.setStyleSheet("background-color: #222; border: 1px solid #444;")
+        exit_cam_layout.addWidget(self.video_exit)
+
+        self.log_exit = QTextEdit()
+        self.log_exit.setReadOnly(True)
+        self.log_exit.setMaximumHeight(80)
+        self.log_exit.setPlaceholderText("출구 OCR 결과 (테스트 다이얼로그와 동일 설정 사용 예정)...")
+        exit_cam_layout.addWidget(self.log_exit)
+        cam_box_inner.addLayout(exit_cam_layout)
+
+        # [RIGHT] 디바이스 목록 및 제어 영역 (기존 3.device_client 로직 유지)
+        right_layout = QVBoxLayout()
+        content_layout.addLayout(right_layout, 1)
+
         devices_box = QGroupBox("디바이스 목록 (1.server 기준)")
         devices_layout = QVBoxLayout()
         devices_box.setLayout(devices_layout)
@@ -125,7 +177,7 @@ class MainWindow(QMainWindow):
         btn_row.addStretch()
         devices_layout.addLayout(btn_row)
 
-        main_layout.addWidget(devices_box, 1)
+        right_layout.addWidget(devices_box, 1)
 
         # ───────── 타이머: 주기적 갱신 ─────────
         self._timer = QTimer(self)
@@ -135,6 +187,12 @@ class MainWindow(QMainWindow):
 
         # 초기 한 번 불러오기
         self.refresh_from_server()
+
+        # ───────── LPR 실시간 영상 타이머 (OCR 비활성, 영상만 표시) ─────────
+        self._video_timer = QTimer(self)
+        self._video_timer.setInterval(40)  # 약 25fps
+        self._video_timer.timeout.connect(self._update_videos)
+        self._video_timer.start()
 
     # ───────── 데이터 로드 및 UI 반영 ─────────
     def refresh_from_server(self) -> None:
@@ -220,6 +278,53 @@ class MainWindow(QMainWindow):
         self._lpr_exit_dialog.show()
         self._lpr_exit_dialog.raise_()
         self._lpr_exit_dialog.activateWindow()
+
+    # ───────── LPR 실시간 영상 표시 (입구/출구) ─────────
+    def _update_videos(self) -> None:
+        """TransmissionManager 에서 최신 LPR 프레임을 읽어와 좌측 화면에만 표시한다."""
+        # 입구 영상 (UDP 7070)
+        try:
+            entry_frame = self._tx.get_lpr_entry_frame()
+        except Exception:
+            entry_frame = None
+        if entry_frame:
+            _, img = entry_frame
+            if img is not None:
+                self._set_pixmap_on_label(self.video_entry, img)
+
+        # 출구 영상 (UDP 7090)
+        try:
+            exit_frame = self._tx.get_lpr_exit_frame()
+        except Exception:
+            exit_frame = None
+        if exit_frame:
+            _, img = exit_frame
+            if img is not None:
+                self._set_pixmap_on_label(self.video_exit, img)
+
+    def _set_pixmap_on_label(self, label: QLabel, cv_img: Any) -> None:
+        """OpenCV 이미지를 QLabel 에 맞춰 표시."""
+        try:
+            h, w, c = cv_img.shape
+            bytes_per_line = c * w
+            qimg = QImage(
+                cv_img.data,
+                w,
+                h,
+                bytes_per_line,
+                QImage.Format.Format_BGR888,
+            ).copy()
+            pix = QPixmap.fromImage(qimg)
+            label.setPixmap(
+                pix.scaled(
+                    label.width(),
+                    label.height(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        except Exception:
+            pass
 
     def _update_summary(self, devices: List[Dict[str, Any]] | None = None) -> None:
         health = self._info.server_health or {}
