@@ -10,13 +10,13 @@
 #include <freertos/task.h>
 
 #if 1 // Debug Home Mode
-const char* ssid     = "addinedu_201class_2-2.4G";
-const char* password = "201class2!";
+const char* ssid     = "iptime_Tony";
+const char* password = "qwer1234!";
 #else
 const char* ssid     = "iptime_WiFiCE6D";
 const char* password = "!Tony6251@";
 #endif
-char serverHostBuf[64] = "192.168.0.149";
+char serverHostBuf[64] = "192.168.55.10";
 
 uint16_t restPortNum = 7080;
 uint16_t udpPortNum  = 7070;

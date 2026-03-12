@@ -12,9 +12,9 @@
  
  // [설정] 네트워크 환경 (esp32_board1_1 과 동일 구조)
  #if 1
- const char* ssid     = "addinedu_201class_2-2.4G";
- const char* password = "201class2!";
- const char* serverIP = "192.168.0.149";  // 3.device_client PC
+ const char* ssid     = "iptime_Tony";
+ const char* password = "qwer1234!";
+ const char* serverIP = "192.168.55.10";  // 3.device_client PC
  #else
  const char* ssid     = "iptime_WiFiCE6D";
  const char* password = "!Tony6251@";

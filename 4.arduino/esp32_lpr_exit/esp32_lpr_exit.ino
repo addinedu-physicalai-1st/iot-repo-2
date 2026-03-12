@@ -9,10 +9,10 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-const char* ssid     = "addinedu_201class_2-2.4G";
-const char* password = "201class2!";
+const char* ssid     = "iptime_Tony";
+const char* password = "qwer1234!";
 
-char serverHostBuf[64] = "192.168.0.149";
+char serverHostBuf[64] = "192.168.55.10";
 
 uint16_t restPortNum = 7080;
 uint16_t udpPortNum  = 7090;

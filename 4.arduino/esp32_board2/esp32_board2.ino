@@ -2,10 +2,10 @@
 #include <WiFi.h>
 
 // --- Network Configuration ---
-const char* ssid     = "addinedu_201class_2-2.4G";
-const char* password = "201class2!";
+const char* ssid     = "iptime_Tony";
+const char* password = "qwer1234!";
 
-const char* serverIP = "192.168.0.149"; // 3.device_client PC IP
+const char* serverIP = "192.168.55.10"; // 3.device_client PC IP
 const uint16_t serverPort = 8080;       // UnifiedPacket TCP 포트
 
 // --- Packet Definitions (UnifiedPacket) ---

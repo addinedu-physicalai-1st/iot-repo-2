@@ -8,10 +8,10 @@
 // [설정] 네트워크 환경
 
 #if 1 
-const char* ssid     = "addinedu_201class_2-2.4G";
-const char* password = "201class2!";
+const char* ssid     = "iptime_Tony";
+const char* password = "qwer1234!";
 
-const char* serverIP = "192.168.0.149"; //Tony Home
+const char* serverIP = "192.168.55.10"; //Tony Home
 #else // Debug Home Mode
 const char* ssid     = "iptime_WiFiCE6D";
 const char* password = "!Tony6251@";
