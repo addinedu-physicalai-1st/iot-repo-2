@@ -15,73 +15,12 @@ def list_residents(db: Session = Depends(get_db)):
     return db.query(models.Resident).order_by(models.Resident.unit_number).all()
 
 
-@router.get("/{resident_id}", response_model=schemas.ResidentRead)
-def get_resident(resident_id: int, db: Session = Depends(get_db)):
-    resident = (
-        db.query(models.Resident)
-        .filter(models.Resident.id == resident_id)
-        .first()
-    )
-    if not resident:
-        raise HTTPException(status_code=404, detail="Resident not found")
-    return resident
-
-@router.post(
-    "/",
-    response_model=schemas.ResidentRead,
-    status_code=status.HTTP_201_CREATED,
-)
-def create_resident(
-    resident_in: schemas.ResidentCreate,
-    db: Session = Depends(get_db),
-):
-    resident = models.Resident(**resident_in.model_dump())
-    db.add(resident)
-    db.commit()
-    db.refresh(resident)
-    return resident
-
-
-@router.put("/{resident_id}", response_model=schemas.ResidentRead)
-def update_resident(
-    resident_id: int,
-    resident_in: schemas.ResidentCreate,
-    db: Session = Depends(get_db),
-):
-    resident = (
-        db.query(models.Resident)
-        .filter(models.Resident.id == resident_id)
-        .first()
-    )
-    if not resident:
-        raise HTTPException(status_code=404, detail="Resident not found")
-
-    for field, value in resident_in.model_dump().items():
-        setattr(resident, field, value)
-
-    db.add(resident)
-    db.commit()
-    db.refresh(resident)
-    return resident
-
-
-@router.delete("/{resident_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_resident(resident_id: int, db: Session = Depends(get_db)):
-    resident = (
-        db.query(models.Resident)
-        .filter(models.Resident.id == resident_id)
-        .first()
-    )
-    if not resident:
-        raise HTTPException(status_code=404, detail="Resident not found")
-
-    db.delete(resident)
-    db.commit()
-    return None
-
-
 @router.get("/rfid", response_model=List[schemas.RfidCardRead])
 def list_rfid_cards(db: Session = Depends(get_db)):
+    """
+    RFID 카드 목록 조회.
+    - 주의: /residents/{resident_id} 보다 먼저 선언해야 path 파라미터에 먹히지 않는다.
+    """
     return db.query(models.RfidCard).order_by(models.RfidCard.card_uid).all()
 
 
@@ -144,6 +83,71 @@ def delete_rfid_card(card_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="RFID card not found")
 
     db.delete(card)
+    db.commit()
+    return None
+
+
+@router.get("/{resident_id}", response_model=schemas.ResidentRead)
+def get_resident(resident_id: int, db: Session = Depends(get_db)):
+    resident = (
+        db.query(models.Resident)
+        .filter(models.Resident.id == resident_id)
+        .first()
+    )
+    if not resident:
+        raise HTTPException(status_code=404, detail="Resident not found")
+    return resident
+
+@router.post(
+    "/",
+    response_model=schemas.ResidentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_resident(
+    resident_in: schemas.ResidentCreate,
+    db: Session = Depends(get_db),
+):
+    resident = models.Resident(**resident_in.model_dump())
+    db.add(resident)
+    db.commit()
+    db.refresh(resident)
+    return resident
+
+
+@router.put("/{resident_id}", response_model=schemas.ResidentRead)
+def update_resident(
+    resident_id: int,
+    resident_in: schemas.ResidentCreate,
+    db: Session = Depends(get_db),
+):
+    resident = (
+        db.query(models.Resident)
+        .filter(models.Resident.id == resident_id)
+        .first()
+    )
+    if not resident:
+        raise HTTPException(status_code=404, detail="Resident not found")
+
+    for field, value in resident_in.model_dump().items():
+        setattr(resident, field, value)
+
+    db.add(resident)
+    db.commit()
+    db.refresh(resident)
+    return resident
+
+
+@router.delete("/{resident_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_resident(resident_id: int, db: Session = Depends(get_db)):
+    resident = (
+        db.query(models.Resident)
+        .filter(models.Resident.id == resident_id)
+        .first()
+    )
+    if not resident:
+        raise HTTPException(status_code=404, detail="Resident not found")
+
+    db.delete(resident)
     db.commit()
     return None
 
