@@ -55,6 +55,8 @@ class DeviceManager:
         self._last_rfid_uid: str | None = None
         self._last_rfid_siteid: str | None = None
         self._last_rfid_at: float = 0.0
+        # 노상 주차면 컨트롤러 LED 제어 상태 (운영 ON/OFF 연동)
+        self._street_led_enabled: bool | None = None
 
     def start(self) -> None:
         """
@@ -441,6 +443,21 @@ class DeviceManager:
             return self._gate_server.send_display(line1, line2)
         return False
 
+    def set_street_led_enabled(self, enabled: bool) -> None:
+        """
+        노상 주차면 컨트롤러(esp32_board2)의 LED on/off 제어.
+
+        - 운영중(ON)  : enabled=True  → 각 센서 상태에 따라 LED 동작
+        - 운영중 아님 : enabled=False → 모든 LED 소등
+        """
+        if not self._gate_server:
+            return
+        if self._street_led_enabled is not None and self._street_led_enabled == enabled:
+            return
+        ok = self._gate_server.send_street_led(enabled)
+        if ok:
+            self._street_led_enabled = enabled
+
     def sync_exit_lcd_base(
         self,
         operation_mode_on: bool,
@@ -482,5 +499,10 @@ class DeviceManager:
         sent = self.send_exit_display(line1[:16], line2[:16])
         if sent:
             self._last_exit_lcd_signature = signature
+
+        # 노상 주차면 컨트롤러 LED 도 운영 상태와 연동
+        # - 운영중(ON): LED 활성
+        # - 운영중이 아니면: LED 전체 소등
+        self.set_street_led_enabled(bool(operation_mode_on))
 
 

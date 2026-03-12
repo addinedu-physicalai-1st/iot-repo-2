@@ -35,8 +35,10 @@ TYPE_CMD_WRITE = 3
 TYPE_DEVICE_LIST = 4
 TYPE_DEV_REGISTER = 6   # 장비 등록 패킷 (device_guid, device_name)
 TYPE_CMD_DISPLAY = 7    # 서버 → 출구 보드(DEV-GATE-2): LCD 2줄 출력
+TYPE_CMD_LED = 8        # 서버 → 노상 주차면 보드(DEV-STREET-1): LED on/off 제어
 ENTRY_GATE_GUID = "DEV-GATE-1"
 EXIT_GATE_GUID = "DEV-GATE-2"
+STREET_GUID = "DEV-STREET-1"
 
 EV_NAMES = {
     1: "ENTRY_DETECTED",
@@ -244,6 +246,21 @@ class Esp32GateServer(threading.Thread):
                     return False
         self._on_log(f"[CMD] 출구 보드({EXIT_GATE_GUID}) 미연결, LCD 전송 스킵")
         return False
+
+    def send_street_led(self, enabled: bool) -> bool:
+        """
+        노상 주차면 컨트롤러(DEV-STREET-1)의 LED on/off 제어.
+        - enabled=True  : 센서 상태에 따라 LED 동작
+        - enabled=False : 모든 LED 소등
+        """
+        mode = 1 if enabled else 0
+        payload = bytes([mode]) + b"\x00" * 31
+        sent = self._send_to_guid(TYPE_CMD_LED, payload, STREET_GUID)
+        if sent:
+            self._on_log(f"[CMD] STREET LED {'ON' if enabled else 'OFF'} 전송")
+        else:
+            self._on_log("[CMD] STREET LED 전송 실패 또는 DEV-STREET-1 미연결")
+        return sent
 
     # ───────── 스레드 메인 루프 ─────────
     def _serve_client(self, conn: socket.socket, addr: tuple) -> None:

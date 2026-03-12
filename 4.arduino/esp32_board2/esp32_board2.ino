@@ -14,6 +14,7 @@ const uint16_t serverPort = 8080;       // UnifiedPacket TCP 포트
 #define TYPE_PING          0xFE
 #define TYPE_PONG          0xFD
 #define TYPE_DEV_REGISTER  6   // 장비 등록 패킷 (device_guid, device_name)
+#define TYPE_CMD_LED       8   // 서버 → LED on/off 제어
 
 #pragma pack(push, 1)
 struct UnifiedPacket {
@@ -62,6 +63,7 @@ int lastState1 = -1;
 int lastState2 = -1;
 int lastState3 = -1;
 int lastState4 = -1;
+bool ledsEnabled = true;  // 운영 상태에 따라 서버에서 on/off 제어
 
 void sendDeviceList() {
     if (!client.connected()) return;
@@ -152,10 +154,18 @@ void loop() {
   int state3 = digitalRead(irPin3);
   int state4 = digitalRead(irPin4);
 
-  digitalWrite(ledPin1, (state1 == DETECTED_STATE) ? LOW : HIGH);
-  digitalWrite(ledPin2, (state2 == DETECTED_STATE) ? LOW : HIGH);
-  digitalWrite(ledPin3, (state3 == DETECTED_STATE) ? LOW : HIGH);
-  digitalWrite(ledPin4, (state4 == DETECTED_STATE) ? LOW : HIGH);
+  if (ledsEnabled) {
+      digitalWrite(ledPin1, (state1 == DETECTED_STATE) ? LOW : HIGH);
+      digitalWrite(ledPin2, (state2 == DETECTED_STATE) ? LOW : HIGH);
+      digitalWrite(ledPin3, (state3 == DETECTED_STATE) ? LOW : HIGH);
+      digitalWrite(ledPin4, (state4 == DETECTED_STATE) ? LOW : HIGH);
+  } else {
+      // 운영 중이 아닐 때는 모든 LED 소등
+      digitalWrite(ledPin1, LOW);
+      digitalWrite(ledPin2, LOW);
+      digitalWrite(ledPin3, LOW);
+      digitalWrite(ledPin4, LOW);
+  }
 
   //lcd.setCursor(0, 0);
   //lcd.print("S1:"); //lcd.print((state1 == DETECTED_STATE) ? "OCC " : "EMP ");
@@ -216,6 +226,15 @@ void loop() {
               client.stop();
           }
           lastKeepAliveTime = millis();
+      }
+
+      // Handle server commands (예: LED on/off)
+      if (client.available() >= sizeof(UnifiedPacket)) {
+          client.read((uint8_t*)&rxPkt, sizeof(UnifiedPacket));
+          if (rxPkt.type == TYPE_CMD_LED) {
+              uint8_t mode = rxPkt.payload[0];
+              ledsEnabled = (mode != 0);
+          }
       }
 
       // Transmit Event Changes
