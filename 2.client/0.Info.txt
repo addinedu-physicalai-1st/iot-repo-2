@@ -18,3 +18,39 @@ SERVER_BASE_URL=http://127.0.0.1:8000   # 서버가 다른 PC면 IP만 수정
 
 cd /home/tonyno/Projects/1.github/local_project/smart_parking_system/2.clientsource .venv/bin/activatepython main.py
 PyQt 창이 뜨고, 서버와 통신이 되면 대시보드에 주차 요약/장비 목록 등이 표시됩니다.
+
+--- 입·출차 기록 API (번호판 이미지, 2.client에서 읽기 테스트) ---
+서버: GET /parking/records → 목록(record_id, license_plate, entry_timestamp, exit_timestamp, entry_img_path, exit_img_path)
+      GET /parking/records/{record_id} → 단일 기록
+      GET /parking/records/{record_id}/entry-image → 입차 이미지 파일
+      GET /parking/records/{record_id}/exit-image → 출차 이미지 파일
+
+2.client에서 테스트 (Python):
+  from api_client import ApiClient
+  c = ApiClient()
+  records = c.list_parking_records(limit=10)
+  for r in records:
+      print(r["record_id"], r["license_plate"], r.get("entry_img_path"), r.get("exit_img_path"))
+  # 이미지 URL로 열기
+  url_entry = c.get_record_entry_image_url(record_id=1)
+  url_exit = c.get_record_exit_image_url(record_id=1)
+
+curl 예시:
+  curl -s http://127.0.0.1:8000/parking/records
+  curl -o entry.jpg http://127.0.0.1:8000/parking/records/1/entry-image
+  curl -o exit.jpg http://127.0.0.1:8000/parking/records/1/exit-image
+
+--- LPR 실시간 영상 (2.client 수신 / 3.device_client 전송, 입구·출구 각각 스레드) ---
+2.client: 대시보드 실행 시 입구/출구 WebSocket 서버 2개 자동 기동.
+  .env: LPR_WS_HOST=0.0.0.0, LPR_WS_PORT_ENTRY=8765, LPR_WS_PORT_EXIT=8766
+3.device_client: .env 에 입구·출구 주소 각각 설정 (또는 공통 URL 하나만 설정 시 출구는 port+1)
+  LPR_WS_SERVER_ENTRY_URL=ws://<2.client IP>:8765
+  LPR_WS_SERVER_EXIT_URL=ws://<2.client IP>:8766
+  또는 LPR_WS_SERVER_URL=ws://<IP>:8765 만 넣으면 출구는 8766 으로 자동.
+
+※ "수신 대기"만 계속 뜨는 경우:
+  1) 2.client를 먼저 실행했는지 확인 (수신 포트 8765, 8766 열림)
+  2) 3.device_client .env 에 위 URL이 2.client가 돌아가는 PC IP로 되어 있는지 확인
+     (같은 PC면 ws://127.0.0.1:8765, ws://127.0.0.1:8766)
+  3) 3.device_client를 실행했는지 확인
+  4) 3.device_client에서 LPR UDP 영상이 들어와야 전송함 (입구 7070, 출구 7090 포트)

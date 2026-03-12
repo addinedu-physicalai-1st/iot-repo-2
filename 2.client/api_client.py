@@ -130,6 +130,29 @@ class ApiClient:
         resp = self._client.delete(f"/residents/rfid/{card_id}")
         resp.raise_for_status()
 
+    # ─── 입·출차 기록 (번호판 이미지 경로 포함) ─────────────────────
+    def list_parking_records(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """입·출차 기록 목록 (entry_img_path, exit_img_path 포함)."""
+        resp = self._client.get("/parking/records", params={"limit": limit})
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_parking_record(self, record_id: int) -> Dict[str, Any]:
+        """단일 입·출차 기록 조회."""
+        resp = self._client.get(f"/parking/records/{record_id}")
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_record_entry_image_url(self, record_id: int) -> str:
+        """입차 번호판 이미지 URL (브라우저/이미지 뷰어에서 열기용)."""
+        base = str(self._client.base_url).rstrip("/")
+        return f"{base}/parking/records/{record_id}/entry-image"
+
+    def get_record_exit_image_url(self, record_id: int) -> str:
+        """출차 번호판 이미지 URL."""
+        base = str(self._client.base_url).rstrip("/")
+        return f"{base}/parking/records/{record_id}/exit-image"
+
     def close(self) -> None:
         self._client.close()
 

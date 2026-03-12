@@ -115,16 +115,19 @@ CREATE TABLE parking_slots (
   KEY idx_parking_slots_sensor_guid (sensor_guid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Parking Records (Manual's high-traffic table)
 CREATE TABLE parking_records (
-    record_id      BIGINT AUTO_INCREMENT PRIMARY KEY,
-    license_plate  VARCHAR(15)  NOT NULL,
-    entry_timestamp DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    exit_timestamp DATETIME(3)  NULL,
-    is_registered  TINYINT(1)   NOT NULL DEFAULT 0,
-    charge_amount  INT          DEFAULT 0,
+    record_id       BIGINT AUTO_INCREMENT PRIMARY KEY,
+    license_plate   VARCHAR(15)  NOT NULL,
+    entry_timestamp DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    exit_timestamp  DATETIME(3)  NULL,
+    is_registered   TINYINT(1)   NOT NULL DEFAULT 0,
+    charge_amount   INT          DEFAULT 0,
+    resident_id     INT          NULL COMMENT '등록 차량이면 residents.id',
+    entry_img_path  VARCHAR(255) NULL COMMENT '입차 번호판 이미지 파일명(경로)',
+    exit_img_path   VARCHAR(255) NULL COMMENT '출차 번호판 이미지 파일명(경로)',
     INDEX idx_active_vehicle (license_plate, exit_timestamp),
-    INDEX idx_entry_time (entry_timestamp)
+    INDEX idx_entry_time (entry_timestamp),
+    INDEX idx_parking_resident (resident_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 4. 초기 데이터(장비 + 슬롯) 삽입
@@ -351,7 +354,10 @@ ON DUPLICATE KEY UPDATE
   gate_auto_state = VALUES(gate_auto_state),
   is_active = VALUES(is_active);
 
-
-
-
+-- (기존 DB에 parking_records 가 이미 있을 때) 이미지/주민 컬럼만 추가:
+-- ALTER TABLE parking_records
+--   ADD COLUMN entry_img_path VARCHAR(255) NULL COMMENT '입차 번호판 이미지 파일명(경로)',
+--   ADD COLUMN exit_img_path  VARCHAR(255) NULL COMMENT '출차 번호판 이미지 파일명(경로)',
+--   ADD COLUMN resident_id    INT          NULL COMMENT '등록 차량이면 residents.id',
+--   ADD INDEX idx_parking_resident (resident_id);
 

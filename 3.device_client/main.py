@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import QApplication, QMessageBox
 import socket
 import sys
+import os
 
 from info_manager import InfoManager
 from device_manager import DeviceManager
@@ -62,4 +63,5 @@ def run_empty_device_client() -> None:
 
 
 if __name__ == "__main__":
+    os.environ["QT_IM_MODULE"] = "ibus"  # 입력기 모드 설정 (KDE는 보통 fcitx, 안되면 ibus 시도)
     run_empty_device_client()

@@ -36,6 +36,7 @@ from lpr_enter_test_dialog import LprEnterTestDialog
 from lpr_exit_test_dialog import LprExitTestDialog
 from lpr_detector import LprRecognitionWorker
 from config import settings
+from lpr_ws_sender import start_lpr_ws_sender_thread
 from saved_image_ocr_dialog import SavedImageOcrDialog
 
 ENTRY_GATE_GUID = "DEV-GATE-1"
@@ -249,6 +250,15 @@ class MainWindow(QMainWindow):
         self._video_timer.setInterval(40)  # 약 25fps
         self._video_timer.timeout.connect(self._update_videos)
         self._video_timer.start()
+
+        # 2.client 로 LPR 실시간 영상 전송 (입구·출구 각각 URL 설정 시)
+        if settings.lpr_ws_server_entry_url or settings.lpr_ws_server_exit_url:
+            start_lpr_ws_sender_thread(
+                settings.lpr_ws_server_entry_url,
+                settings.lpr_ws_server_exit_url,
+                self._tx.get_lpr_entry_frame,
+                self._tx.get_lpr_exit_frame,
+            )
 
     # ───────── 데이터 로드 및 UI 반영 ─────────
     def refresh_from_server(self) -> None:

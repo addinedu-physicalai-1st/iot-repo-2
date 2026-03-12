@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, BigInteger, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from .db import Base
@@ -139,5 +139,21 @@ class DeviceClient(Base):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
+
+
+class ParkingRecord(Base):
+    """입·출차 기록 (번호판, 입출차 시각, 입·출차 이미지 경로, 등록 주민 참조)."""
+
+    __tablename__ = "parking_records"
+
+    record_id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    license_plate = Column(String(15), nullable=False)
+    entry_timestamp = Column(DateTime, nullable=False)
+    exit_timestamp = Column(DateTime, nullable=True)
+    is_registered = Column(Integer, nullable=False, default=0)  # TINYINT(1)
+    charge_amount = Column(Integer, default=0)
+    resident_id = Column(Integer, ForeignKey("residents.id"), nullable=True)
+    entry_img_path = Column(String(255), nullable=True)
+    exit_img_path = Column(String(255), nullable=True)
 
 

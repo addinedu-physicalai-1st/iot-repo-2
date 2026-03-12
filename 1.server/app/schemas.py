@@ -173,3 +173,27 @@ class DeviceClientRead(DeviceClientBase):
     class Config:
         from_attributes = True
 
+
+# ----- parking_records (입·출차 기록, 번호판 이미지 경로 포함) -----
+class ParkingRecordBase(BaseModel):
+    license_plate: str
+    is_registered: int = 0
+    charge_amount: int = 0
+    resident_id: Optional[int] = None
+    entry_img_path: Optional[str] = None
+    exit_img_path: Optional[str] = None
+
+
+class ParkingRecordCreate(ParkingRecordBase):
+    entry_timestamp: datetime
+    exit_timestamp: Optional[datetime] = None
+
+
+class ParkingRecordRead(ParkingRecordBase):
+    record_id: int
+    entry_timestamp: datetime
+    exit_timestamp: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+

@@ -1,3 +1,5 @@
 PyQt6
 httpx
 python-dotenv
+opencv-python-headless
+websockets

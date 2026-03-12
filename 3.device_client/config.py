@@ -10,6 +10,21 @@ ENV_PATH = BASE_DIR / ".env"
 load_dotenv(ENV_PATH)
 
 
+def _ws_url_with_port_offset(url: str, port_offset: int) -> str:
+    """ws://host:port 에서 port + port_offset 한 URL 반환."""
+    if not url or port_offset == 0:
+        return url
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        port = p.port or (443 if p.scheme == "wss" else 8765)
+        new_port = port + port_offset
+        netloc = f"{p.hostname}:{new_port}" if p.hostname else ""
+        return f"{p.scheme}://{netloc}{p.path or ''}{p.query and '?' + p.query or ''}"
+    except Exception:
+        return url
+
+
 class DeviceClientSettings:
     @property
     def server_base_url(self) -> str:
@@ -91,6 +106,29 @@ class DeviceClientSettings:
     def device_no(self) -> str:
         # device_clients 테이블과 매칭되는 device_no
         return os.getenv("device_no", "DC-001")
+
+    # 2.client 로 LPR 실시간 영상 전송용 WebSocket (입구·출구 각각 별도 주소)
+    @property
+    def lpr_ws_server_entry_url(self) -> str:
+        """2.client 입구 LPR 수신 주소. 예: ws://192.168.0.10:8765"""
+        u = os.getenv("LPR_WS_SERVER_ENTRY_URL", "").strip()
+        if u:
+            return u
+        u = os.getenv("LPR_WS_SERVER_URL", "").strip()
+        if u:
+            return _ws_url_with_port_offset(u, 0)
+        return ""
+
+    @property
+    def lpr_ws_server_exit_url(self) -> str:
+        """2.client 출구 LPR 수신 주소. 예: ws://192.168.0.10:8766"""
+        u = os.getenv("LPR_WS_SERVER_EXIT_URL", "").strip()
+        if u:
+            return u
+        u = os.getenv("LPR_WS_SERVER_URL", "").strip()
+        if u:
+            return _ws_url_with_port_offset(u, 1)
+        return ""
 
     @property
     def lpr_plate_model_path(self) -> str:

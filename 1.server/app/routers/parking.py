@@ -1,6 +1,8 @@
+from pathlib import Path
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -177,4 +179,67 @@ def dashboard_summary(db: Session = Depends(get_db)):
         gate_auto_state=GATE_AUTO_STATE,
         slots=slots,
     )
+
+
+# ----- parking_records (입·출차 기록 + 번호판 이미지 경로) -----
+@router.get("/records", response_model=List[schemas.ParkingRecordRead])
+def list_parking_records(
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
+    """입·출차 기록 목록 (entry_img_path, exit_img_path 포함). 2.client에서 조회용."""
+    return (
+        db.query(models.ParkingRecord)
+        .order_by(models.ParkingRecord.entry_timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+@router.get("/records/{record_id}", response_model=schemas.ParkingRecordRead)
+def get_parking_record(record_id: int, db: Session = Depends(get_db)):
+    """단일 입·출차 기록 조회."""
+    rec = db.query(models.ParkingRecord).filter(models.ParkingRecord.record_id == record_id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return rec
+
+
+def _safe_record_image_path(subdir: str, filename: str | None) -> Path | None:
+    """lpr_record/{subdir}/{filename} 절대 경로. filename에 경로 조작 방지."""
+    if not filename or "/" in filename or "\\" in filename:
+        return None
+    base = (settings.lpr_record_dir / subdir).resolve()
+    path = (base / filename).resolve()
+    if not path.is_file():
+        return None
+    try:
+        path.relative_to(base)
+    except ValueError:
+        return None
+    return path
+
+
+@router.get("/records/{record_id}/entry-image")
+def get_record_entry_image(record_id: int, db: Session = Depends(get_db)):
+    """입차 번호판 이미지 파일 반환 (entry_img_path 기준)."""
+    rec = db.query(models.ParkingRecord).filter(models.ParkingRecord.record_id == record_id).first()
+    if not rec or not rec.entry_img_path:
+        raise HTTPException(status_code=404, detail="Entry image not found")
+    path = _safe_record_image_path("entry", rec.entry_img_path)
+    if not path:
+        raise HTTPException(status_code=404, detail="Entry image file not found")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@router.get("/records/{record_id}/exit-image")
+def get_record_exit_image(record_id: int, db: Session = Depends(get_db)):
+    """출차 번호판 이미지 파일 반환 (exit_img_path 기준)."""
+    rec = db.query(models.ParkingRecord).filter(models.ParkingRecord.record_id == record_id).first()
+    if not rec or not rec.exit_img_path:
+        raise HTTPException(status_code=404, detail="Exit image not found")
+    path = _safe_record_image_path("exit", rec.exit_img_path)
+    if not path:
+        raise HTTPException(status_code=404, detail="Exit image file not found")
+    return FileResponse(path, media_type="image/jpeg")
 

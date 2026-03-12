@@ -69,6 +69,11 @@ class Settings:
         # 0: 동작하지 않음, 1: 열림, 2: 닫힘
         return int(os.getenv("GATE_AUTO_STATE", "0"))
 
+    @property
+    def lpr_record_dir(self) -> Path:
+        """입·출차 번호판 이미지 저장 루트 (entry/, exit/ 하위에 파일 저장)."""
+        return BASE_DIR / "lpr_record"
+
 
 settings = Settings()
 

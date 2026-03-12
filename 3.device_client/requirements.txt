@@ -3,3 +3,4 @@ httpx
 pyserial
 opencv-python
 numpy
+websockets

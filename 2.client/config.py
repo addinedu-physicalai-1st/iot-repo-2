@@ -27,6 +27,19 @@ class ClientSettings:
     def udp_listen_port(self) -> int:
         return int(os.getenv("UDP_LISTEN_PORT", "9100"))
 
+    # LPR 실시간 영상 수신용 WebSocket 서버 (입구·출구 각각 별도 포트/스레드)
+    @property
+    def lpr_ws_host(self) -> str:
+        return os.getenv("LPR_WS_HOST", "0.0.0.0")
+
+    @property
+    def lpr_ws_port_entry(self) -> int:
+        return int(os.getenv("LPR_WS_PORT_ENTRY", "8765"))
+
+    @property
+    def lpr_ws_port_exit(self) -> int:
+        return int(os.getenv("LPR_WS_PORT_EXIT", "8766"))
+
 
 settings = ClientSettings()
 

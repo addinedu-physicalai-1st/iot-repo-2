@@ -1,6 +1,14 @@
+import queue
 from typing import Any, Dict, List
 
+try:
+    import cv2
+    _CV2_AVAILABLE = True
+except ImportError:
+    _CV2_AVAILABLE = False
+
 from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QLabel,
@@ -19,6 +27,8 @@ from PyQt6.QtWidgets import (
 )
 
 from api_client import ApiClient
+from config import settings
+from lpr_ws_server import start_lpr_ws_server_threads
 from ui.resident_manager import ResidentManagerWindow
 from ui.sensor_manager import SensorManagerWindow
 
@@ -33,6 +43,12 @@ class DashboardWindow(QMainWindow):
         self._gate_sensor_state: int = 1
         self._entry_gate_connected: bool = False
         self._syncing_gate_combo: bool = False
+        # CCTV 웹캠
+        self._video_cap: Any = None
+        self._video_playing: bool = False
+        self._video_timer: QTimer | None = None
+        # LPR WebSocket 수신 큐 (channel, jpeg_bytes). 채널 0=입구, 1=출구
+        self._lpr_frame_queue: queue.Queue = queue.Queue(maxsize=30)
 
         self.setWindowTitle("스마트 주차장 관리 시스템 - 대시보드")
         self.resize(1200, 700)
@@ -106,6 +122,44 @@ class DashboardWindow(QMainWindow):
             summary_layout.addWidget(lbl)
 
         main_layout.addWidget(summary_box)
+
+        # 실시간 영상 3구역: CCTV 웹캠 | 입구 LPR | 출구 LPR
+        video_box = QGroupBox("실시간 영상 (CCTV · 입구 LPR · 출구 LPR)")
+        video_layout = QHBoxLayout()
+        video_box.setLayout(video_layout)
+        video_style = "background-color: #252733; border-radius: 6px; border: 1px solid #3a3b45;"
+        min_size = (320, 240)
+
+        self.label_cctv = QLabel("재생 버튼을 눌러 웹캠을 시작하세요.")
+        self.label_cctv.setMinimumSize(*min_size)
+        self.label_cctv.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_cctv.setStyleSheet(video_style)
+        video_layout.addWidget(self.label_cctv, 1)
+
+        port_entry = settings.lpr_ws_port_entry
+        port_exit = settings.lpr_ws_port_exit
+        self.label_lpr_entry = QLabel(f"입구 LPR\n(수신 대기 · 포트 {port_entry})")
+        self.label_lpr_entry.setMinimumSize(*min_size)
+        self.label_lpr_entry.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_lpr_entry.setStyleSheet(video_style)
+        self.label_lpr_entry.setToolTip(f"3.device_client .env: LPR_WS_SERVER_ENTRY_URL=ws://127.0.0.1:{port_entry} (같은 PC)")
+        video_layout.addWidget(self.label_lpr_entry, 1)
+
+        self.label_lpr_exit = QLabel(f"출구 LPR\n(수신 대기 · 포트 {port_exit})")
+        self.label_lpr_exit.setMinimumSize(*min_size)
+        self.label_lpr_exit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label_lpr_exit.setStyleSheet(video_style)
+        self.label_lpr_exit.setToolTip(f"3.device_client .env: LPR_WS_SERVER_EXIT_URL=ws://127.0.0.1:{port_exit} (같은 PC)")
+        video_layout.addWidget(self.label_lpr_exit, 1)
+
+        self.btn_video_toggle = QPushButton("웹캠 재생")
+        self.btn_video_toggle.setCheckable(True)
+        self.btn_video_toggle.clicked.connect(self._on_video_toggle)
+        video_layout.addWidget(self.btn_video_toggle)
+        if not _CV2_AVAILABLE:
+            self.btn_video_toggle.setEnabled(False)
+            self.label_cctv.setText("opencv-python\n필요")
+        main_layout.addWidget(video_box)
 
         # 중앙 영역: 좌측 주차면 맵, 우측 장비/이벤트
         splitter = QSplitter()
@@ -283,16 +337,123 @@ class DashboardWindow(QMainWindow):
         main_layout.addLayout(btn_layout)
 
         self.timer = QTimer(self)
-        # 주차 감지 반응성을 높이기 위해 1초 주기로 단축
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.refresh_all)
         self.timer.start()
 
+        # CCTV 프레임 갱신용 타이머 (재생 중일 때만 동작)
+        self._video_timer = QTimer(self)
+        self._video_timer.setInterval(40)
+        self._video_timer.timeout.connect(self._update_video_frame)
+
+        # LPR WebSocket 서버 기동 (입구·출구 각각 별도 스레드/포트)
+        lpr_threads = start_lpr_ws_server_threads(
+            settings.lpr_ws_host,
+            settings.lpr_ws_port_entry,
+            settings.lpr_ws_port_exit,
+            self._lpr_frame_queue,
+        )
+        if lpr_threads is None:
+            self.statusBar().showMessage(
+                "LPR 수신 비활성: pip install websockets 후 2.client 재실행",
+                10000,
+            )
+        # LPR 수신 큐 처리 타이머
+        self._lpr_timer = QTimer(self)
+        self._lpr_timer.setInterval(50)
+        self._lpr_timer.timeout.connect(self._drain_lpr_queue)
+        self._lpr_timer.start()
+
         self.refresh_all()
+        if lpr_threads:
+            self.statusBar().showMessage(
+                f"LPR 수신: 입구 {settings.lpr_ws_port_entry} / 출구 {settings.lpr_ws_port_exit} — 3.device_client .env 포트와 일치해야 함",
+                8000,
+            )
 
     def closeEvent(self, event) -> None:
+        self._stop_video()
         self.api.close()
         super().closeEvent(event)
+
+    def _on_video_toggle(self) -> None:
+        if self.btn_video_toggle.isChecked():
+            self._start_video()
+        else:
+            self._stop_video()
+
+    def _start_video(self) -> None:
+        if not _CV2_AVAILABLE or self._video_playing:
+            return
+        self._video_cap = cv2.VideoCapture(0)
+        if not self._video_cap.isOpened():
+            self.label_cctv.setText("웹캠을 열 수 없습니다.")
+            self.btn_video_toggle.setChecked(False)
+            return
+        self._video_playing = True
+        self.btn_video_toggle.setText("일시정지")
+        self._video_timer.start()
+
+    def _stop_video(self) -> None:
+        self._video_playing = False
+        self._video_timer.stop()
+        if self._video_cap is not None:
+            try:
+                self._video_cap.release()
+            except Exception:
+                pass
+            self._video_cap = None
+        self.btn_video_toggle.setChecked(False)
+        self.btn_video_toggle.setText("재생")
+        self.label_cctv.setText("재생 버튼을 눌러 웹캠을 시작하세요.")
+
+    def _update_video_frame(self) -> None:
+        if not _CV2_AVAILABLE or not self._video_playing or self._video_cap is None:
+            return
+        ret, frame = self._video_cap.read()
+        if not ret or frame is None:
+            return
+        h, w, ch = frame.shape
+        bytes_per_line = ch * w
+        qimg = QImage(
+            frame.data,
+            w,
+            h,
+            bytes_per_line,
+            QImage.Format.Format_BGR888,
+        ).copy()
+        pix = QPixmap.fromImage(qimg)
+        self.label_cctv.setPixmap(
+            pix.scaled(
+                self.label_cctv.width(),
+                self.label_cctv.height(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
+    def _drain_lpr_queue(self) -> None:
+        """LPR WebSocket에서 받은 프레임을 큐에서 꺼내 입구/출구 라벨에 표시."""
+        while True:
+            try:
+                channel, jpeg_bytes = self._lpr_frame_queue.get_nowait()
+            except queue.Empty:
+                break
+            if not jpeg_bytes:
+                continue
+            qimg = QImage()
+            if not qimg.loadFromData(jpeg_bytes):
+                continue
+            pix = QPixmap.fromImage(qimg)
+            label = self.label_lpr_entry if channel == 0 else self.label_lpr_exit
+            label.setPixmap(
+                pix.scaled(
+                    label.width(),
+                    label.height(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
 
     def open_resident_manager(self) -> None:
         if self._resident_window is None:

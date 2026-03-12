@@ -561,16 +561,20 @@ class TransmissionManager:
         thread = threading.Thread(target=_serve, daemon=True)
         thread.start()
 
+    # LPR 끊김 판정: 이 시간(초) 동안 UDP 패킷 없으면 미연결로 간주
+    _LPR_DISCONNECT_TIMEOUT_SEC = 20.0
+
     def _start_lpr_monitor(self) -> None:
-        """LPR 카메라 연결 모니터: 각 UDP 포트(입구/출구)에 10초 동안 패킷이 없으면 끊김으로 간주."""
+        """LPR 카메라 연결 모니터: 입구/출구 UDP 포트에 일정 시간 패킷이 없으면 끊김으로 간주."""
 
         def _loop() -> None:
+            timeout = self._LPR_DISCONNECT_TIMEOUT_SEC
             while True:
                 time.sleep(2.0)
                 now = time.time()
-                if self._lpr_connected and (now - self._lpr_last_seen > 10.0):
+                if self._lpr_connected and (now - self._lpr_last_seen > timeout):
                     self._set_lpr_connected(False)
-                if self._lpr_exit_connected and (now - self._lpr_exit_last_seen > 10.0):
+                if self._lpr_exit_connected and (now - self._lpr_exit_last_seen > timeout):
                     self._set_lpr_exit_connected(False)
 
         t = threading.Thread(target=_loop, daemon=True)
