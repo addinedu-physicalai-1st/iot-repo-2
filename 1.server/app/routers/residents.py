@@ -15,6 +15,17 @@ def list_residents(db: Session = Depends(get_db)):
     return db.query(models.Resident).order_by(models.Resident.unit_number).all()
 
 
+@router.get("/{resident_id}", response_model=schemas.ResidentRead)
+def get_resident(resident_id: int, db: Session = Depends(get_db)):
+    resident = (
+        db.query(models.Resident)
+        .filter(models.Resident.id == resident_id)
+        .first()
+    )
+    if not resident:
+        raise HTTPException(status_code=404, detail="Resident not found")
+    return resident
+
 @router.post(
     "/",
     response_model=schemas.ResidentRead,

@@ -205,6 +205,29 @@ def get_parking_record(record_id: int, db: Session = Depends(get_db)):
     return rec
 
 
+@router.patch("/records/{record_id}", response_model=schemas.ParkingRecordRead)
+def update_parking_record(
+    record_id: int,
+    rec_in: schemas.ParkingRecordUpdate,
+    db: Session = Depends(get_db),
+):
+    """입·출차 기록 일부 수정 (번호판, 등록 여부, 요금, resident_id 등)."""
+    rec = (
+        db.query(models.ParkingRecord)
+        .filter(models.ParkingRecord.record_id == record_id)
+        .first()
+    )
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    data = rec_in.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(rec, field, value)
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+    return rec
+
+
 def _safe_record_image_path(subdir: str, filename: str | None) -> Path | None:
     """lpr_record/{subdir}/{filename} 절대 경로. filename에 경로 조작 방지."""
     if not filename or "/" in filename or "\\" in filename:

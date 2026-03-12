@@ -89,6 +89,11 @@ class ApiClient:
         resp.raise_for_status()
         return resp.json()
 
+    def get_resident(self, resident_id: int) -> Dict[str, Any]:
+        resp = self._client.get(f"/residents/{resident_id}")
+        resp.raise_for_status()
+        return resp.json()
+
     def create_resident(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         resp = self._client.post("/residents/", json=payload)
         resp.raise_for_status()
@@ -140,6 +145,12 @@ class ApiClient:
     def get_parking_record(self, record_id: int) -> Dict[str, Any]:
         """단일 입·출차 기록 조회."""
         resp = self._client.get(f"/parking/records/{record_id}")
+        resp.raise_for_status()
+        return resp.json()
+
+    def update_parking_record(self, record_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """입·출차 기록 일부 수정 (번호판, 등록 여부, 요금 등)."""
+        resp = self._client.patch(f"/parking/records/{record_id}", json=payload)
         resp.raise_for_status()
         return resp.json()
 

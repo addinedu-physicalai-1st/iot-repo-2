@@ -31,6 +31,7 @@ from config import settings
 from lpr_ws_server import start_lpr_ws_server_threads
 from ui.resident_manager import ResidentManagerWindow
 from ui.sensor_manager import SensorManagerWindow
+from ui.parking_records_dialog import ParkingRecordsDialog
 
 
 class DashboardWindow(QMainWindow):
@@ -327,6 +328,10 @@ class DashboardWindow(QMainWindow):
         )
         btn_layout.addWidget(self.button_manage_residents)
 
+        self.button_parking_records = QPushButton("주차 기록 조회")
+        self.button_parking_records.clicked.connect(self.open_parking_records)
+        btn_layout.addWidget(self.button_parking_records)
+
         self.button_manage_sensors = QPushButton("장비관리 / 센서 관리")
         self.button_manage_sensors.clicked.connect(
             self.open_sensor_manager,
@@ -375,6 +380,10 @@ class DashboardWindow(QMainWindow):
         self._stop_video()
         self.api.close()
         super().closeEvent(event)
+
+    def open_parking_records(self) -> None:
+        dlg = ParkingRecordsDialog(self)
+        dlg.exec()
 
     def _on_video_toggle(self) -> None:
         if self.btn_video_toggle.isChecked():

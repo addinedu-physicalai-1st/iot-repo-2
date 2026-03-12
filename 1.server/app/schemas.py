@@ -197,3 +197,16 @@ class ParkingRecordRead(ParkingRecordBase):
     class Config:
         from_attributes = True
 
+
+class ParkingRecordUpdate(BaseModel):
+    """입·출차 기록 일부 수정용 스키마 (운영자 번호판/요금/등록 여부 수정 등)."""
+
+    license_plate: Optional[str] = None
+    is_registered: Optional[int] = None
+    charge_amount: Optional[int] = None
+    resident_id: Optional[int] = None
+    entry_timestamp: Optional[datetime] = None
+    exit_timestamp: Optional[datetime] = None
+    entry_img_path: Optional[str] = None
+    exit_img_path: Optional[str] = None
+
